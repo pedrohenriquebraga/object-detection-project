@@ -1,4 +1,5 @@
 package com.eitalab.objectdetection.src.tensorflow
+import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.util.Log
 import java.io.File
@@ -6,6 +7,8 @@ import org.tensorflow.lite.Interpreter as TfInterpreter
 import androidx.core.graphics.scale
 import com.eitalab.objectdetection.ui.DetectionResult
 import org.tensorflow.lite.support.image.TensorImage
+import java.io.FileOutputStream
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 

@@ -8,13 +8,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.eitalab.objectdetection.databinding.MainActivityBinding
 import com.eitalab.objectdetection.src.tensorflow.TensorflowController
+import com.eitalab.objectdetection.src.tensorflow.Utils
 import com.google.common.util.concurrent.ListenableFuture
 import java.io.File
 import java.io.FileOutputStream
@@ -23,12 +23,13 @@ import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
 
+    private lateinit var tf: TensorflowController
+    private val utils = Utils()
+    private val cameraExecutor = Executors.newSingleThreadExecutor()
     private lateinit var binding: MainActivityBinding
     private lateinit var cameraProviderFuture : ListenableFuture<ProcessCameraProvider>
     private lateinit var cameraProvider: ProcessCameraProvider
-    private val cameraExecutor = Executors.newSingleThreadExecutor()
     private lateinit var modelFile: File;
-    private lateinit var tf: TensorflowController
     private lateinit var capturedImage: Bitmap
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -39,7 +40,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        modelFile = getModelFileFromAssets("efficientdet-lite0.tflite")
+        modelFile = utils.getModelFileFromAssets("efficientdet-lite0.tflite", filesDir, assets)
         tf = TensorflowController(modelFile)
 
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
@@ -65,7 +66,7 @@ class MainActivity : ComponentActivity() {
             .build()
             .also {
                 it.setAnalyzer(cameraExecutor) { imageProxy ->
-                    capturedImage = capturedImageToBitmap(imageProxy)
+                    capturedImage = utils.capturedImageToBitmap(imageProxy, tf)
                     val detections = tf.detect(capturedImage)
                     if (detections != null) {
                         runOnUiThread {
@@ -79,35 +80,5 @@ class MainActivity : ComponentActivity() {
         //binding.btDetect.setOnClickListener {
         //    tf.detect(capturedImage)
         //}
-    }
-
-    private fun capturedImageToBitmap(imageProxy: ImageProxy): Bitmap {
-        val bitmap = imageProxy.toBitmap()
-        val rotatedBitmap = tf.rotateBitmap(bitmap, imageProxy.imageInfo.rotationDegrees)
-        imageProxy.close()
-        return rotatedBitmap
-    }
-
-    private fun getModelFileFromAssets(fileName: String): File {
-        val file = File(filesDir, fileName)
-        if (file.exists()) {
-            return file
-        }
-
-        try {
-            assets.open(fileName).use { inputStream ->
-                FileOutputStream(file).use { outputStream ->
-                    val buffer = ByteArray(4 * 1024)
-                    var read: Int
-                    while (inputStream.read(buffer).also { read = it } != -1) {
-                        outputStream.write(buffer, 0, read)
-                    }
-                    outputStream.flush()
-                }
-            }
-        } catch (e: IOException) {
-            Log.e("MainActivity", "Error copying model from assets", e)
-        }
-        return file
     }
 }
