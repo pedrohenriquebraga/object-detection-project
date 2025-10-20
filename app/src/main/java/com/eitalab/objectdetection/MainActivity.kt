@@ -3,6 +3,7 @@ package com.eitalab.objectdetection
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.camera.core.CameraSelector
@@ -11,8 +12,6 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
-import androidx.core.graphics.get
-import androidx.core.graphics.toColor
 import androidx.lifecycle.LifecycleOwner
 import com.eitalab.objectdetection.databinding.MainActivityBinding
 import com.eitalab.objectdetection.src.tensorflow.TensorflowController
@@ -38,10 +37,10 @@ class MainActivity : ComponentActivity() {
 
         setContentView(binding.root)
         enableEdgeToEdge()
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         modelFile = getModelFileFromAssets("efficientdet-lite0.tflite")
         tf = TensorflowController(modelFile)
-        tf.initTensorflow()
 
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
@@ -58,7 +57,6 @@ class MainActivity : ComponentActivity() {
         val cameraSelector : CameraSelector = CameraSelector.Builder()
             .requireLensFacing(CameraSelector.LENS_FACING_BACK)
             .build()
-
 
         preview.surfaceProvider = binding.cameraPreview.getSurfaceProvider()
 
@@ -85,8 +83,9 @@ class MainActivity : ComponentActivity() {
 
     private fun capturedImageToBitmap(imageProxy: ImageProxy): Bitmap {
         val bitmap = imageProxy.toBitmap()
+        val rotatedBitmap = tf.rotateBitmap(bitmap, imageProxy.imageInfo.rotationDegrees)
         imageProxy.close()
-        return bitmap
+        return rotatedBitmap
     }
 
     private fun getModelFileFromAssets(fileName: String): File {

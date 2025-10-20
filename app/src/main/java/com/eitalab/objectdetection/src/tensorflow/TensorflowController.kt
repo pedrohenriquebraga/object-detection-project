@@ -13,7 +13,7 @@ class TensorflowController {
 
     private lateinit var interpreter: TfInterpreter
     private var modelFile: File
-    private var LABELS = arrayListOf<String>(
+    private var labels = arrayListOf<String>(
         "pessoa",
         "bicicleta",
         "carro",
@@ -106,11 +106,12 @@ class TensorflowController {
         "escova de dentes",
         "escova de cabelo"
     )
-    private val max_conf = 0.55f
+    private val maxConf = 0.55f
     private var started = false
 
     constructor(modelFile: File) {
         this.modelFile = modelFile
+        initTensorflow()
     }
 
     fun initTensorflow() {
@@ -122,7 +123,6 @@ class TensorflowController {
         } catch (e: Exception) {
             Log.e("Tensorflow Controller", "Erro ao iniciar Tensorflow: ${e.message}")
         }
-
     }
 
     fun detect(imgInput: Bitmap): MutableList<DetectionResult>? {
@@ -148,9 +148,9 @@ class TensorflowController {
 
         for (i in 0 until numDetections) {
             val score = scores[0][i]
-            if (score >= max_conf) {
+            if (score >= maxConf) {
                 val clsIndex = classes[0][i].toInt()
-                val label = if (clsIndex in LABELS.indices) LABELS[clsIndex] else "Desconhecido"
+                val label = if (clsIndex in labels.indices) labels[clsIndex] else "Desconhecido"
                 val box = boxes[0][i]
                 detections.add(DetectionResult(label, score, box))
             }
@@ -166,5 +166,13 @@ class TensorflowController {
         buffer.order(ByteOrder.nativeOrder())
         return buffer
     }
+
+    fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+        if (rotationDegrees == 0) return bitmap
+        val matrix = android.graphics.Matrix()
+        matrix.postRotate(rotationDegrees.toFloat())
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    }
+
 
 }

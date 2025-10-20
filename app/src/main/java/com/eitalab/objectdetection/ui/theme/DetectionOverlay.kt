@@ -4,11 +4,12 @@ import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
 import android.view.View
+import androidx.core.graphics.toColorInt
 
 data class DetectionResult(
     val label: String,
     val confidence: Float,
-    val box: FloatArray // [ymin, xmin, ymax, xmax]
+    val box: FloatArray
 )
 
 class DetectionOverlay @JvmOverloads constructor(
@@ -16,14 +17,14 @@ class DetectionOverlay @JvmOverloads constructor(
 ) : View(context, attrs) {
 
     private val boxPaint = Paint().apply {
-        color = Color.parseColor("#FF3C6E")
+        color = "#FF3C6E".toColorInt()
         style = Paint.Style.STROKE
         strokeWidth = 6f
     }
 
     private val textPaint = Paint().apply {
         color = Color.WHITE
-        textSize = 42f
+        textSize = 32f
         typeface = Typeface.DEFAULT_BOLD
     }
 
