@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.util.Size
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -34,6 +35,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var modelFile: File;
     private lateinit var capturedImage: Bitmap
     private var cameraGranted = false;
+    private var lastAnalyzedTime = 0L
 
     private fun requestCameraPermission() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -93,6 +95,7 @@ class MainActivity : ComponentActivity() {
 
         val cameraSelector : CameraSelector = CameraSelector.Builder()
             .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+
             .build()
 
         preview.surfaceProvider = binding.cameraPreview.getSurfaceProvider()
@@ -102,12 +105,17 @@ class MainActivity : ComponentActivity() {
             .build()
             .also {
                 it.setAnalyzer(cameraExecutor) { imageProxy ->
-                    capturedImage = utils.capturedImageToBitmap(imageProxy, tf)
-                    val detections = tf.detect(capturedImage)
-                    if (detections != null) {
-                        runOnUiThread {
-                            binding.detectionOverlay.setResults(detections)
+                    val currentTime = System.currentTimeMillis()
+                    if (currentTime - lastAnalyzedTime >= 300) {
+                        capturedImage = utils.capturedImageToBitmap(imageProxy, tf)
+                        val detections = tf.detect(capturedImage)
+                        if (detections != null) {
+                            runOnUiThread {
+                                binding.detectionOverlay.setResults(detections)
+                            }
                         }
+                    } else {
+                        imageProxy.close()
                     }
                 }
             }
