@@ -3,12 +3,11 @@ import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.util.Log
 import java.io.File
-import org.tensorflow.lite.Interpreter as TfInterpreter
+import org.tensorflow.lite.InterpreterApi as TfInterpreter
 import androidx.core.graphics.scale
 import com.eitalab.objectdetection.ui.DetectionResult
+import org.tensorflow.lite.nnapi.NnApiDelegate
 import org.tensorflow.lite.support.image.TensorImage
-import java.io.FileOutputStream
-import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -118,9 +117,12 @@ class TensorflowController {
     }
 
     fun initTensorflow() {
+
+        val options = TfInterpreter.Options().apply {
+            setRuntime(TfInterpreter.Options.TfLiteRuntime.PREFER_SYSTEM_OVER_APPLICATION)
+        }
         try {
-            interpreter = TfInterpreter(modelFile, null)
-            interpreter.allocateTensors()
+            interpreter = TfInterpreter.create(modelFile, options)
             started = true
             Log.i("Tensorflow Controller","Tensorflow iniciado com sucesso")
         } catch (e: Exception) {
@@ -132,7 +134,7 @@ class TensorflowController {
         if (!started)
             return null
 
-        val imgBuffer = bitmapToTensorImage(imgInput);
+        val imgBuffer = bitmapToTensorImage(imgInput, 320, 320);
 
         val boxes = Array(1) { Array(25) { FloatArray(4) } }
         val classes = Array(1) { FloatArray(25) }
@@ -162,8 +164,10 @@ class TensorflowController {
         return detections
     }
 
-    private fun bitmapToTensorImage(bitmap: Bitmap): ByteBuffer {
-        val resizedBitmap = bitmap.scale(320, 320)
+    private fun bitmapToTensorImage(bitmap: Bitmap, width: Int, height: Int): ByteBuffer {
+        // TODO: CROP IMAGE
+        val utils = Utils()
+        val resizedBitmap = utils.cropCenter(bitmap, width, height)
         val tensorImage = TensorImage.fromBitmap(resizedBitmap)
         val buffer = tensorImage.buffer
         buffer.order(ByteOrder.nativeOrder())

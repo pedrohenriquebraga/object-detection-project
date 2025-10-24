@@ -106,12 +106,12 @@ class MainActivity : ComponentActivity() {
             .also {
                 it.setAnalyzer(cameraExecutor) { imageProxy ->
                     val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastAnalyzedTime >= 300) {
+                    if (currentTime - lastAnalyzedTime >= 250) {
                         capturedImage = utils.capturedImageToBitmap(imageProxy, tf)
                         val detections = tf.detect(capturedImage)
                         if (detections != null) {
                             runOnUiThread {
-                                binding.detectionOverlay.setResults(detections)
+                                binding.detectionOverlay.setResults(detections, 320, 320)
                             }
                         }
                     } else {

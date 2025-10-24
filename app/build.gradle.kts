@@ -90,5 +90,5 @@ dependencies {
 }
 
 configurations.all {
-    exclude(group = "com.google.ai.edge.litert")
+    exclude(("com.google.ai.edge.litert"))
 }

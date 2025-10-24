@@ -16,6 +16,22 @@ class Utils {
         return rotatedBitmap
     }
 
+    fun cropCenter(bitmap: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+
+        val startX = (width - targetWidth) / 2
+        val startY = (height - targetHeight) / 2
+
+        val x = if (startX < 0) 0 else startX
+        val y = if (startY < 0) 0 else startY
+
+        val cropWidth = if (targetWidth > width) width else targetWidth
+        val cropHeight = if (targetHeight > height) height else targetHeight
+
+        return Bitmap.createBitmap(bitmap, x, y, cropWidth, cropHeight)
+    }
+
     fun getModelFileFromAssets(fileName: String, filesDir: File, assets: AssetManager): File {
         val file = File(filesDir, fileName)
         if (file.exists()) {

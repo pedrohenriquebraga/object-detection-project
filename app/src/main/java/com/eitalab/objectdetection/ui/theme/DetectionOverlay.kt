@@ -30,22 +30,42 @@ class DetectionOverlay @JvmOverloads constructor(
 
     private var results: List<DetectionResult> = emptyList()
 
-    fun setResults(detections: List<DetectionResult>) {
-        results = detections
+    private var modelWidth = 320f
+    private var modelHeight = 320f
+
+    fun setResults(
+        detections: List<DetectionResult>,
+        modelWidth: Int,
+        modelHeight: Int
+    ) {
+        this.results = detections
+        this.modelWidth = modelWidth.toFloat()
+        this.modelHeight = modelHeight.toFloat()
         invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val w = width.toFloat()
-        val h = height.toFloat()
+
+        val viewWidth = width.toFloat()
+        val viewHeight = height.toFloat()
+
+        if (modelWidth == 0f || modelHeight == 0f) return
+
+        val scaleX = viewWidth / modelWidth
+        val scaleY = viewHeight / modelHeight
+        val scale = minOf(scaleX, scaleY)
+
+        val offsetX = (viewWidth - modelWidth * scale) / 2
+        val offsetY = (viewHeight - modelHeight * scale) / 2
 
         for (det in results) {
             val box = det.box
-            val left = box[1] * w
-            val top = box[0] * h
-            val right = box[3] * w
-            val bottom = box[2] * h
+
+            val top = box[0] * modelHeight * scale + offsetY
+            val left = box[1] * modelWidth * scale + offsetX
+            val bottom = box[2] * modelHeight * scale + offsetY
+            val right = box[3] * modelWidth * scale + offsetX
 
             canvas.drawRect(left, top, right, bottom, boxPaint)
 
