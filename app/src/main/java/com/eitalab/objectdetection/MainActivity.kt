@@ -17,6 +17,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.eitalab.objectdetection.databinding.MainActivityBinding
+import com.eitalab.objectdetection.src.services.BluetoothService
 import com.eitalab.objectdetection.src.tensorflow.TensorflowController
 import com.eitalab.objectdetection.src.tensorflow.Utils
 import com.google.common.util.concurrent.ListenableFuture
@@ -26,6 +27,7 @@ import java.util.concurrent.Executors
 class MainActivity : ComponentActivity() {
 
     private val CAMERA_PERMISSION_REQUEST_CODE = 100
+    private val BLUETOOTH_PERMISSION_REQUEST_CODE = 101
     private lateinit var tf: TensorflowController
     private val utils = Utils()
     private val cameraExecutor = Executors.newSingleThreadExecutor()
@@ -49,6 +51,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestBluetoothPermissions() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN),
+                BLUETOOTH_PERMISSION_REQUEST_CODE)
+        } else {
+            val bluetoothService = BluetoothService(this)
+            bluetoothService.turnOnBluetooth()
+        }
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int,
                                             permissions: Array<String>,
                                             grantResults: IntArray) {
@@ -62,6 +76,14 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(this, "Autorize o uso da câmera", Toast.LENGTH_LONG).show()
                 }
             }
+            BLUETOOTH_PERMISSION_REQUEST_CODE -> {
+                if ((grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED })) {
+                    val bluetoothService = BluetoothService(this)
+                    bluetoothService.turnOnBluetooth()
+                } else {
+                    Toast.makeText(this, "Autorize o uso do Bluetooth", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -73,6 +95,8 @@ class MainActivity : ComponentActivity() {
         setContentView(binding.root)
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        requestBluetoothPermissions()
 
         requestCameraPermission()
 
