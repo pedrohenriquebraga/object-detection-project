@@ -1,14 +1,19 @@
 package com.eitalab.objectdetection
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.util.Log
 import android.util.Size
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresPermission
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -26,64 +31,76 @@ import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
 
-    private val CAMERA_PERMISSION_REQUEST_CODE = 100
-    private val BLUETOOTH_PERMISSION_REQUEST_CODE = 101
     private lateinit var tf: TensorflowController
+    private lateinit var bluetoothService: BluetoothService
     private val utils = Utils()
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private lateinit var binding: MainActivityBinding
-    private lateinit var cameraProviderFuture : ListenableFuture<ProcessCameraProvider>
+    private lateinit var cameraProviderFuture: ListenableFuture<ProcessCameraProvider>
     private lateinit var cameraProvider: ProcessCameraProvider
     private lateinit var modelFile: File;
     private lateinit var capturedImage: Bitmap
     private var cameraGranted = false;
     private var lastAnalyzedTime = 0L
 
+    private val requestCameraPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
+            if (isGranted) {
+                cameraGranted = true
+                initCamera()
+            } else {
+                Toast.makeText(this, "Autorize o uso da câmera", Toast.LENGTH_LONG).show()
+            }
+        }
+
+    @SuppressLint("MissingPermission")
+    private val requestBluetoothPermissionsLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) @androidx.annotation.RequiresPermission(
+            android.Manifest.permission.BLUETOOTH_CONNECT
+        ) { permissions ->
+            if (permissions.all { it.value }) {
+                val bluetoothService = BluetoothService(this)
+                bluetoothService.turnOnBluetooth()
+            } else {
+                Toast.makeText(this, "Autorize o uso do Bluetooth", Toast.LENGTH_LONG).show()
+            }
+        }
+
     private fun requestCameraPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                arrayOf(Manifest.permission.CAMERA),
-                CAMERA_PERMISSION_REQUEST_CODE)
-        } else {
-            cameraGranted = true
-            initCamera()
+        when {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED -> {
+                cameraGranted = true
+                initCamera()
+            }
+
+            else -> {
+                requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
         }
     }
 
     private fun requestBluetoothPermissions() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN),
-                BLUETOOTH_PERMISSION_REQUEST_CODE)
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestBluetoothPermissionsLauncher.launch(
+                arrayOf(
+                    Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.BLUETOOTH_SCAN
+                )
+            )
         } else {
-            val bluetoothService = BluetoothService(this)
-            bluetoothService.turnOnBluetooth()
-        }
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int,
-                                            permissions: Array<String>,
-                                            grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        when (requestCode) {
-            CAMERA_PERMISSION_REQUEST_CODE -> {
-                if ((grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
-                    cameraGranted = true
-                    initCamera()
-                } else {
-                    Toast.makeText(this, "Autorize o uso da câmera", Toast.LENGTH_LONG).show()
-                }
-            }
-            BLUETOOTH_PERMISSION_REQUEST_CODE -> {
-                if ((grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED })) {
-                    val bluetoothService = BluetoothService(this)
-                    bluetoothService.turnOnBluetooth()
-                } else {
-                    Toast.makeText(this, "Autorize o uso do Bluetooth", Toast.LENGTH_LONG).show()
-                }
-            }
+            bluetoothService = BluetoothService(this)
+            initAssistiveDeviceConnection()
         }
     }
 
@@ -97,9 +114,7 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         requestBluetoothPermissions()
-
         requestCameraPermission()
-
     }
 
     fun initCamera() {
@@ -113,11 +128,40 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    fun initAssistiveDeviceConnection() {
+
+        bluetoothService.turnOnBluetooth()
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+
+            return
+        }
+        bluetoothService.scanLeDevice(object : BluetoothService.OnDeviceFoundListener {
+            @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT])
+            override fun onDeviceFound(device: BluetoothDevice) {
+                Log.d("SCAN", "Achou: ${device.name ?: "Sem Nome"} - ${device.address}");
+                if (device.name == "BT05") {
+                    bluetoothService.connectAssistiveDevice(device.address)
+                    bluetoothService.sendMessage("Olá Mundo!")
+                }
+            }
+
+            override fun onScanFinished() {
+                // Esconda o loading/progress bar
+                Toast.makeText(this@MainActivity, "Scan finalizado", Toast.LENGTH_SHORT).show()
+            }
+        })
+    }
+
     fun bindPreview() {
-        val preview : Preview = Preview.Builder()
+        val preview: Preview = Preview.Builder()
             .build()
 
-        val cameraSelector : CameraSelector = CameraSelector.Builder()
+        val cameraSelector: CameraSelector = CameraSelector.Builder()
             .requireLensFacing(CameraSelector.LENS_FACING_BACK)
 
             .build()
@@ -144,7 +188,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-        cameraProvider.bindToLifecycle(this as LifecycleOwner, cameraSelector, preview, imageAnalyzer)
+        cameraProvider.bindToLifecycle(
+            this as LifecycleOwner,
+            cameraSelector,
+            preview,
+            imageAnalyzer
+        )
         //binding.btDetect.setOnClickListener {
         //    tf.detect(capturedImage)
         //}
