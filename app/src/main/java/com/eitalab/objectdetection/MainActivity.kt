@@ -1,15 +1,20 @@
 package com.eitalab.objectdetection
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresPermission
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -37,21 +42,23 @@ class MainActivity : ComponentActivity() {
     private lateinit var modelFile: File
     private lateinit var capturedImage: Bitmap
 
+    // Controles de Estado
     private var isBluetoothInitialized = false
+    private var isDeviceConnected = false
+    private var isScanning = false
     private var lastAnalyzedTime = 0L
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    @SuppressLint("MissingPermission")
     private val requestMultiplePermissionsLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
             val allGranted = permissions.entries.all { it.value }
-
             if (allGranted) {
                 startAppFeatures()
             } else {
-                Toast.makeText(
-                    this,
-                    "Todas as permissões (Câmera, Bluetooth e Localização) são necessárias.",
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(this, "Permissões necessárias não concedidas.", Toast.LENGTH_LONG)
+                    .show()
             }
         }
 
@@ -67,7 +74,6 @@ class MainActivity : ComponentActivity() {
 
     private fun checkAndRequestPermissions() {
         val permissionsToRequest = getRequiredPermissions()
-
         val allPermissionsGranted = permissionsToRequest.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
@@ -81,16 +87,17 @@ class MainActivity : ComponentActivity() {
 
     private fun getRequiredPermissions(): Array<String> {
         val permissions = mutableListOf(Manifest.permission.CAMERA)
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions.add(Manifest.permission.BLUETOOTH_SCAN)
             permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
             permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
             permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
         return permissions.toTypedArray()
     }
 
+    @SuppressLint("MissingPermission")
     private fun startAppFeatures() {
         initCamera()
         initBluetoothService()
@@ -99,7 +106,6 @@ class MainActivity : ComponentActivity() {
     private fun initCamera() {
         modelFile = utils.getModelFileFromAssets("efficientdet-lite0.tflite", filesDir, assets)
         tf = TensorflowController(modelFile)
-
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             cameraProvider = cameraProviderFuture.get()
@@ -107,57 +113,89 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    @SuppressLint("MissingPermission")
     private fun initBluetoothService() {
         if (isBluetoothInitialized) return
 
         bluetoothService = BluetoothService(this)
         bluetoothService.turnOnBluetooth()
 
-        initAssistiveDeviceConnection()
+        bluetoothService.setConnectionListener(object : BluetoothService.ConnectionListener {
+            override fun onConnected() {
+                runOnUiThread {
+                    isDeviceConnected = true
+                    isScanning = false
+                    Toast.makeText(this@MainActivity, "Dispositivo Conectado!", Toast.LENGTH_SHORT)
+                        .show()
+                }
+            }
+
+            override fun onDisconnected() {
+                runOnUiThread {
+                    isDeviceConnected = false
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Conexão perdida. Reconectando...",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    startBleScanLoop()
+                }
+            }
+        })
+
         isBluetoothInitialized = true
+        startBleScanLoop()
     }
 
-    private fun initAssistiveDeviceConnection() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ActivityCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.BLUETOOTH_SCAN
-                ) != PackageManager.PERMISSION_GRANTED
-            ) return
-        } else {
-            if (ActivityCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.ACCESS_FINE_LOCATION
-                ) != PackageManager.PERMISSION_GRANTED
-            ) return
-        }
+    private fun startBleScanLoop() {
+        if (isFinishing || isDestroyed || isDeviceConnected || isScanning) return
+
+        if (!hasBluetoothPermissions()) return
+
+        isScanning = true
+        Log.d("BLE_LOOP", "Iniciando ciclo de scan...")
 
         bluetoothService.scanLeDevice(object : BluetoothService.OnDeviceFoundListener {
-            override fun onDeviceFound(device: android.bluetooth.BluetoothDevice) {
+            @SuppressLint("MissingPermission")
+            override fun onDeviceFound(device: BluetoothDevice) {
                 try {
-                    Log.d("SCAN", "Achou: ${device.name ?: "Sem Nome"} - ${device.address}")
                     if (device.name == "BT05") {
+                        Log.d("BLE_LOOP", "BT05 Encontrado! Tentando conectar...")
                         bluetoothService.connectAssistiveDevice(device.address)
                     }
                 } catch (e: SecurityException) {
-                    Log.e(
-                        "Bluetooth",
-                        "Erro de permissão ao acessar nome do dispositivo: ${e.message}"
-                    )
+                    Log.e("BLE_LOOP", "Erro de permissão: ${e.message}")
                 }
             }
 
             override fun onScanFinished() {
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, "Scan finalizado", Toast.LENGTH_SHORT).show()
+                isScanning = false
+                if (!isDeviceConnected && !isFinishing) {
+                    Log.d("BLE_LOOP", "Scan finalizado sem conexão. Reiniciando em 1s...")
+                    mainHandler.postDelayed({
+                        startBleScanLoop()
+                    }, 500)
                 }
             }
         })
     }
 
+    private fun hasBluetoothPermissions(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            return ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
     private fun bindPreview() {
         val preview: Preview = Preview.Builder().build()
-
         val cameraSelector: CameraSelector = CameraSelector.Builder()
             .requireLensFacing(CameraSelector.LENS_FACING_BACK)
             .build()
@@ -179,7 +217,8 @@ class MainActivity : ComponentActivity() {
                             runOnUiThread {
                                 binding.detectionOverlay.setResults(detections, 320, 320)
                                 detections.forEach { detect ->
-                                    if (::bluetoothService.isInitialized) {
+                                    // Só envia se o serviço existir E o dispositivo estiver conectado
+                                    if (::bluetoothService.isInitialized && isDeviceConnected) {
                                         bluetoothService.sendMessage("Objeto ${detect.label} detectado com ${detect.confidence}\n")
                                     }
                                 }
@@ -198,5 +237,14 @@ class MainActivity : ComponentActivity() {
             preview,
             imageAnalyzer
         )
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        mainHandler.removeCallbacksAndMessages(null)
+        if (::bluetoothService.isInitialized) {
+            bluetoothService.close()
+        }
+        cameraExecutor.shutdown()
     }
 }

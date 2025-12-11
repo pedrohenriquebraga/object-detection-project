@@ -25,6 +25,11 @@ class BluetoothService(private val context: Context) {
         fun onScanFinished()
     }
 
+    interface ConnectionListener {
+        fun onConnected()
+        fun onDisconnected()
+    }
+
     private var isScanning = false
     private var isConnected = false
     private val handler = Handler(Looper.getMainLooper())
@@ -41,6 +46,12 @@ class BluetoothService(private val context: Context) {
     private val SCAN_PERIOD: Long = 5000
     private val foundDeviceAddresses = mutableSetOf<String>()
 
+    private var connectionListener: ConnectionListener? = null
+
+    fun setConnectionListener(listener: ConnectionListener) {
+        this.connectionListener = listener
+    }
+
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
@@ -48,6 +59,7 @@ class BluetoothService(private val context: Context) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     Log.d("BLE", "Conectado. Descobrindo serviços...")
                     isConnected = true
+                    handler.post { connectionListener?.onConnected() }
                     gatt?.discoverServices()
                 }
 
@@ -56,6 +68,7 @@ class BluetoothService(private val context: Context) {
                     isConnected = false
                     bluetoothGatt?.close()
                     bluetoothGatt = null
+                    handler.post { connectionListener?.onDisconnected() }
                 }
             }
         }
@@ -145,7 +158,7 @@ class BluetoothService(private val context: Context) {
         if (targetMac.isNotEmpty()) {
             try {
                 val device = bluetoothAdapter?.getRemoteDevice(targetMac)
-                bluetoothGatt = device?.connectGatt(context, false, gattCallback)
+                bluetoothGatt = device?.connectGatt(context, true, gattCallback)
                 Log.d("BLE", "Tentando conectar em: $targetMac")
             } catch (e: IllegalArgumentException) {
                 Log.e("BLE", "Endereço MAC inválido: $targetMac")
