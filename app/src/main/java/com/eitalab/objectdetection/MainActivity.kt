@@ -146,7 +146,7 @@ class MainActivity : ComponentActivity() {
                 Log.d("SCAN", "Achou: ${device.name ?: "Sem Nome"} - ${device.address}");
                 if (device.name == "BT05") {
                     bluetoothService.connectAssistiveDevice(device.address)
-                    bluetoothService.sendMessage("Olá Mundo!")
+
                 }
             }
 
@@ -180,6 +180,9 @@ class MainActivity : ComponentActivity() {
                         if (detections != null) {
                             runOnUiThread {
                                 binding.detectionOverlay.setResults(detections, 320, 320)
+                                detections.map { detect ->
+                                    bluetoothService.sendMessage("Objeto ${detect.label} detectado com ${detect.confidence}\n")
+                                }
                             }
                         }
                     } else {
