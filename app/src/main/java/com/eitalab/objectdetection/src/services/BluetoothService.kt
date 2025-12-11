@@ -2,9 +2,7 @@ package com.eitalab.objectdetection.src.services
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.bluetooth.*
-import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
@@ -15,173 +13,187 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
-import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import java.util.UUID
 
 class BluetoothService(private val context: Context) {
+
     interface OnDeviceFoundListener {
         fun onDeviceFound(device: BluetoothDevice)
         fun onScanFinished()
     }
 
     private var isScanning = false
+    private var isConnected = false
     private val handler = Handler(Looper.getMainLooper())
-    private val SCAN_PERIOD: Long = 5000
-    private val foundDeviceAddresses = mutableSetOf<String>()
-    private var bluetoothManager: BluetoothManager? = null
-    private var bluetoothAdapter: BluetoothAdapter? = null
+
+    private var currentScanCallback: ScanCallback? = null
+
+    private val bluetoothManager by lazy { context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
+    private val bluetoothAdapter by lazy { bluetoothManager.adapter }
     private var bluetoothGatt: BluetoothGatt? = null
-    private var bluetoothLeScanner: BluetoothLeScanner? = null
 
-
-    // IMPORTANTE: Substitua estes UUIDs pelos do seu dispositivo BLE (Ex: HM-10, ESP32, Arduino)
-    // Estes são exemplos comuns para módulos UART BLE
     private val SERVICE_UUID: UUID = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
     private val CHAR_UUID: UUID = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
 
-    var isConnected = false
+    private val SCAN_PERIOD: Long = 5000
+    private val foundDeviceAddresses = mutableSetOf<String>()
 
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.d("BLE", "Conectado ao servidor GATT.")
-                isConnected = true
-                gatt?.discoverServices()
+            when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> {
+                    Log.d("BLE", "Conectado. Descobrindo serviços...")
+                    isConnected = true
+                    gatt?.discoverServices()
+                }
 
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                Log.d("BLE", "Desconectado do servidor GATT.")
-                isConnected = false
-                bluetoothGatt = null
+                BluetoothProfile.STATE_DISCONNECTED -> {
+                    Log.d("BLE", "Desconectado.")
+                    isConnected = false
+                    bluetoothGatt?.close()
+                    bluetoothGatt = null
+                }
             }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.d("BLE", "Serviços descobertos.")
-                sendMessage("Mensagem enviada via app Android 😊\n")
+                Log.d("BLE", "Serviços prontos.")
+            } else {
+                Log.w("BLE", "Falha na descoberta de serviços: $status")
             }
         }
     }
 
     init {
-        setupBluetooth()
-    }
-
-    private fun setupBluetooth() {
-        bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        bluetoothAdapter = bluetoothManager?.adapter
-        bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
-
         if (bluetoothAdapter == null) {
-            Toast.makeText(context, "O bluetooth não está disponível", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Bluetooth não disponível neste dispositivo", Toast.LENGTH_LONG)
+                .show()
         }
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
+    @SuppressLint("MissingPermission")
     fun scanLeDevice(listener: OnDeviceFoundListener) {
-        val scanCallback = object : ScanCallback() {
+        if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) return
+
+        val scanner = bluetoothAdapter?.bluetoothLeScanner ?: return
+
+        if (isScanning) {
+            stopScan(listener)
+            return
+        }
+
+        foundDeviceAddresses.clear()
+
+        currentScanCallback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val device = result.device
-                val deviceAddress = device.address
-                if (!foundDeviceAddresses.contains(deviceAddress)) {
-                    foundDeviceAddresses.add(deviceAddress)
+                val address = device.address
+                if (address != null && !foundDeviceAddresses.contains(address)) {
+                    foundDeviceAddresses.add(address)
                     listener.onDeviceFound(device)
                 }
             }
 
             override fun onScanFailed(errorCode: Int) {
-                super.onScanFailed(errorCode)
-                isScanning = false
-                listener.onScanFinished()
+                Log.e("BLE", "Scan falhou: $errorCode")
+                stopScan(listener)
             }
         }
 
-        if (!isScanning) {
-            handler.postDelayed({
-                isScanning = false
-                bluetoothLeScanner?.stopScan(scanCallback)
-            }, SCAN_PERIOD)
-            isScanning = true
-            bluetoothLeScanner?.startScan(scanCallback)
-        } else {
-            isScanning = false
-            bluetoothLeScanner?.stopScan(scanCallback)
+        handler.postDelayed({ stopScan(listener) }, SCAN_PERIOD)
+
+        isScanning = true
+        scanner.startScan(currentScanCallback)
+        Log.d("BLE", "Scan iniciado")
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopScan(listener: OnDeviceFoundListener? = null) {
+        if (!isScanning) return
+
+        val scanner = bluetoothAdapter?.bluetoothLeScanner
+        if (currentScanCallback != null && scanner != null) {
+            scanner.stopScan(currentScanCallback)
         }
+
+        isScanning = false
+        currentScanCallback = null
+        listener?.onScanFinished()
+        Log.d("BLE", "Scan finalizado")
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private fun getPairedDeviceList(): Set<BluetoothDevice>? {
-        return bluetoothAdapter?.bondedDevices
-    }
-
-    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT])
+    @SuppressLint("MissingPermission")
     fun connectAssistiveDevice(newMacAddress: String = "") {
         if (isConnected || bluetoothGatt != null) return
+        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return
 
-        val storage = StorageService(context as Activity)
-        val macAddress = storage.getData("assistive_device_mac")
+        val storage = StorageService(context as android.app.Activity)
+        val savedMac = storage.getData("assistive_device_mac")
 
-        if (macAddress.isNotEmpty() && newMacAddress.isEmpty()) {
-            val pairedDevices = getPairedDeviceList()
-            val targetDevice = pairedDevices?.find { it.address == macAddress }
-
-            val device = targetDevice ?: bluetoothAdapter?.getRemoteDevice(macAddress)
-
-            device?.let {
-                bluetoothGatt = it.connectGatt(context, true, gattCallback)
-            }
+        val targetMac = if (newMacAddress.isNotEmpty()) {
+            storage.saveData("assistive_device_mac", newMacAddress)
+            newMacAddress
         } else {
-            val device = bluetoothAdapter?.getRemoteDevice(newMacAddress)
+            savedMac
+        }
 
-            device?.let {
-                bluetoothGatt = it.connectGatt(context, true, gattCallback)
-                storage.saveData("assistive_device_mac", newMacAddress)
+        if (targetMac.isNotEmpty()) {
+            try {
+                val device = bluetoothAdapter?.getRemoteDevice(targetMac)
+                bluetoothGatt = device?.connectGatt(context, false, gattCallback)
+                Log.d("BLE", "Tentando conectar em: $targetMac")
+            } catch (e: IllegalArgumentException) {
+                Log.e("BLE", "Endereço MAC inválido: $targetMac")
             }
         }
     }
 
     @SuppressLint("MissingPermission")
     fun sendMessage(message: String) {
-        if (!isConnected || bluetoothGatt == null) return
+        if (!isConnected || bluetoothGatt == null) {
+            Log.w("BLE", "Não conectado. Mensagem ignorada.")
+            return
+        }
 
         val service = bluetoothGatt?.getService(SERVICE_UUID)
         val characteristic = service?.getCharacteristic(CHAR_UUID)
 
         if (characteristic != null) {
-            characteristic.setValue(message.toByteArray())
-
-            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-
-            val success = bluetoothGatt?.writeCharacteristic(characteristic) ?: false
-
-            if (!success) {
-                Log.e("BLE", "Falha ao iniciar a escrita")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                bluetoothGatt?.writeCharacteristic(
+                    characteristic,
+                    message.toByteArray(),
+                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                characteristic.value = message.toByteArray()
+                @Suppress("DEPRECATION")
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                bluetoothGatt?.writeCharacteristic(characteristic)
             }
         } else {
-            Log.e("BLE", "Serviço ou Característica não encontrados. Verifique os UUIDs.")
+            Log.e("BLE", "Característica de escrita não encontrada.")
         }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun turnOnBluetooth() {
         if (bluetoothAdapter?.isEnabled == false) {
-            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            if (ActivityCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                !hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
             ) {
-                Toast.makeText(context, "Permissão de Conexão ao Bluetooth não concedida", Toast.LENGTH_SHORT).show()
                 return
             }
+            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            enableBtIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(enableBtIntent)
         }
-    }
-
-    fun onConnect() {
-        this.sendMessage("Olá Mundo!")
     }
 
     @SuppressLint("MissingPermission")
@@ -189,5 +201,15 @@ class BluetoothService(private val context: Context) {
         bluetoothGatt?.close()
         bluetoothGatt = null
         isConnected = false
+        stopScan()
+    }
+
+    private fun hasPermission(permission: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+
+        return ActivityCompat.checkSelfPermission(
+            context,
+            permission
+        ) == PackageManager.PERMISSION_GRANTED
     }
 }
