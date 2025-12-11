@@ -1,4 +1,5 @@
 package com.eitalab.objectdetection.src.tensorflow
+
 import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.util.Log
@@ -124,7 +125,7 @@ class TensorflowController {
         try {
             interpreter = TfInterpreter.create(modelFile, options)
             started = true
-            Log.i("Tensorflow Controller","Tensorflow iniciado com sucesso")
+            Log.i("Tensorflow Controller", "Tensorflow iniciado com sucesso")
         } catch (e: Exception) {
             Log.e("Tensorflow Controller", "Erro ao iniciar Tensorflow: ${e.message}")
         }
