@@ -41,13 +41,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var modelFile: File
     private lateinit var capturedImage: Bitmap
 
-    // Controles de Estado
     private var isBluetoothInitialized = false
     private var isDeviceConnected = false
     private var isScanning = false
     private var lastAnalyzedTime = 0L
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val defaultAssistiveDeviceName = "Assistive Device"
 
     @SuppressLint("MissingPermission")
     private val requestMultiplePermissionsLauncher =
@@ -158,7 +158,7 @@ class MainActivity : ComponentActivity() {
             @SuppressLint("MissingPermission")
             override fun onDeviceFound(device: BluetoothDevice) {
                 try {
-                    if (device.name == "BT05") {
+                    if (device.name == defaultAssistiveDeviceName) {
                         Log.d("BLE_LOOP", "BT05 Encontrado! Tentando conectar...")
                         bluetoothService.connectAssistiveDevice(device.address)
                     }
