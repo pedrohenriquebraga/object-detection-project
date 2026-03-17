@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val defaultAssistiveDeviceName = "Assistive Device"
+    private val detectionInterval = 200
 
     @SuppressLint("MissingPermission")
     private val requestMultiplePermissionsLauncher =
@@ -207,7 +208,7 @@ class MainActivity : ComponentActivity() {
             .also {
                 it.setAnalyzer(cameraExecutor) { imageProxy ->
                     val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastAnalyzedTime >= 250) {
+                    if (currentTime - lastAnalyzedTime >= detectionInterval) {
                         lastAnalyzedTime = currentTime
                         capturedImage = utils.capturedImageToBitmap(imageProxy, tf)
                         val detections = tf.detect(capturedImage)
@@ -216,7 +217,6 @@ class MainActivity : ComponentActivity() {
                             runOnUiThread {
                                 binding.detectionOverlay.setResults(detections, 320, 320)
                                 detections.forEach { detect ->
-                                    // Só envia se o serviço existir E o dispositivo estiver conectado
                                     if (::bluetoothService.isInitialized && isDeviceConnected) {
                                         bluetoothService.sendMessage("Objeto ${detect.label} detectado com ${detect.confidence}\n")
                                     }

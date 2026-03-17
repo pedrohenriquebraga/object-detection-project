@@ -75,6 +75,7 @@ class BluetoothService(private val context: Context) {
         override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.d("BLE", "Serviços prontos.")
+                sendMessage("Conexão estabelecida e pronto para enviar novas mensagens!\n")
             } else {
                 Log.w("BLE", "Falha na descoberta de serviços: $status")
             }
