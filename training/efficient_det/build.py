@@ -9,7 +9,18 @@ def resize_image(image, label):
     image = tf.image.resize(image, (320, 320))
     return image, label
 
-print(tf.config.list_physical_devices('GPU'))
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"GPUs disponíveis: {gpus}")
+    except RuntimeError as e:
+        print(f"Erro ao configurar GPU: {e}")
+else:
+    print("Nenhuma GPU encontrada. O treinamento será feito na CPU.")
+    
+    
 def check_image_validity(image_path):
     try:
         img = tf.io.read_file(image_path)
@@ -63,8 +74,7 @@ base_model.trainable = False  # Freeze base model for transfer learning
 x = GlobalAveragePooling2D()(base_model.output)
 x = Dropout(0.2)(x)
 
-# Ajuste automático do número de classes conforme as pastas do dataset
-num_classes = 5  # cars, cats, chair, dogs, doors
+num_classes = 5  # cars, cats, chairs, dogs, doors
 output = Dense(num_classes, activation='softmax')(x)
 
 model = Model(inputs=base_model.input, outputs=output)
@@ -72,7 +82,6 @@ model = Model(inputs=base_model.input, outputs=output)
 model.compile(optimizer='adam',
               loss='sparse_categorical_crossentropy',
               metrics=['accuracy'])
-
 
 history = model.fit(
     train_dataset,

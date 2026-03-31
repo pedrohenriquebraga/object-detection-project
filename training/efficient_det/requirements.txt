@@ -1,2 +1,3 @@
-tensorflow
+tensorflow[and-cuda]
 numpy
+pillow
