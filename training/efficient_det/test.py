@@ -1,61 +1,94 @@
 import argparse
+import os
+
+import cv2
 import numpy as np
 import tensorflow as tf
-import cv2
 
-def predict_tflite(interpreter, img_array):
-	input_details = interpreter.get_input_details()
-	output_details = interpreter.get_output_details()
-	interpreter.set_tensor(input_details[0]['index'], img_array.astype(np.float32))
-	interpreter.invoke()
-	# Se houver múltiplas saídas, colete todas
-	if len(output_details) == 3:
-		boxes = interpreter.get_tensor(output_details[0]['index'])
-		classes = interpreter.get_tensor(output_details[1]['index'])
-		scores = interpreter.get_tensor(output_details[2]['index'])
-		return boxes, classes, scores
-	else:
-		# fallback: retorna só a predição (ex: classificação)
-		predictions = interpreter.get_tensor(output_details[0]['index'])
-		return predictions
 
-def preprocess_frame(frame):
-	img = cv2.resize(frame, (320, 320))
-	img = img.astype(np.float32)
+def load_classes(classes_path):
+	if not os.path.exists(classes_path):
+		return []
+
+	with open(classes_path, 'r') as f:
+		return [line.strip() for line in f if line.strip()]
+
+
+def get_model_input_size(model_input_shape, fallback=(512, 512)):
+	if len(model_input_shape) >= 3:
+		height = model_input_shape[1] or fallback[0]
+		width = model_input_shape[2] or fallback[1]
+		return int(height), int(width)
+	return fallback
+
+
+def preprocess_frame(frame, target_size):
+	img = cv2.resize(frame, target_size)
+	img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+	img = tf.keras.applications.efficientnet.preprocess_input(img.astype(np.float32))
 	img = np.expand_dims(img, axis=0)
 	return img
 
-def draw_boxes(frame, boxes, classes, scores, class_names, threshold=0.3):
-	h, w, _ = frame.shape
-	for i in range(len(scores)):
-		if scores[i] > threshold:
-			ymin, xmin, ymax, xmax = boxes[i]
-			left, top, right, bottom = int(xmin * w), int(ymin * h), int(xmax * w), int(ymax * h)
-			cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-			label = f"{class_names[int(classes[i])]}: {scores[i]*100:.1f}%"
-			cv2.putText(frame, label, (left, top-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
+
+def predict_tflite(interpreter, img_array):
+	input_details = interpreter.get_input_details()
+	input_dtype = input_details[0]['dtype']
+	input_tensor = img_array.astype(input_dtype)
+	if len(input_details[0]['shape']) == 4 and input_details[0]['shape'][0] == 1:
+		interpreter.set_tensor(input_details[0]['index'], input_tensor)
+	else:
+		interpreter.set_tensor(input_details[0]['index'], np.resize(input_tensor, input_details[0]['shape']))
+	interpreter.invoke()
+	return interpreter.get_tensor(interpreter.get_output_details()[0]['index'])
+
+
+def predict_keras(model, img_array):
+	return model.predict(img_array, verbose=0)
+
+
+def draw_label(frame, label):
+	cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 	return frame
 
+
 if __name__ == "__main__":
-	parser = argparse.ArgumentParser(description="EfficientDet real-time detection (TFLite)")
-	parser.add_argument('--tflite', action='store_true', help='Use TFLite model (required for real-time)')
+	parser = argparse.ArgumentParser(description="EfficientDet real-time classification (Keras or TFLite)")
+	parser.add_argument('--keras', action='store_true', help='Use Keras model for real-time inference')
+	parser.add_argument('--tflite', action='store_true', help='Use TFLite model for real-time inference')
+	parser.add_argument('--model-path', type=str, default=None, help='Path to the model file')
 	parser.add_argument('--camera', type=int, default=0, help='Camera index (default 0)')
 	args = parser.parse_args()
 
-	classes = ['carro', "gato", "cadeira", "cachorro", "porta"]
+	classes = load_classes('./classes.txt')
+	if not classes:
+		classes = ['bus', 'cars', 'cats', 'chairs', 'dogs', 'doors']
 
-	if not args.tflite:
-		print("Apenas o modo TFLite é suportado para detecção em tempo real.")
+	if args.keras and args.tflite:
+		print('Escolha apenas um backend: --keras ou --tflite.')
 		exit(1)
 
-	interpreter = tf.lite.Interpreter(model_path="./models/efficient_det.tflite")
-	interpreter.allocate_tensors()
-	input_details = interpreter.get_input_details()
-	output_details = interpreter.get_output_details()
+	if not args.keras and not args.tflite:
+		if args.model_path and args.model_path.endswith('.keras'):
+			args.keras = True
+		else:
+			args.tflite = True
 
-	cap = cv2.VideoCapture(args.camera)
+	model_path = args.model_path
+	if not model_path:
+		model_path = './models/efficient_det.keras' if args.keras else './models/efficient_det.tflite'
+
+	if args.keras:
+		model = tf.keras.models.load_model(model_path)
+		input_size = get_model_input_size(model.input_shape)
+	else:
+		interpreter = tf.lite.Interpreter(model_path=model_path)
+		interpreter.allocate_tensors()
+		input_details = interpreter.get_input_details()
+		input_size = get_model_input_size(input_details[0]['shape'])
+
+	cap = cv2.VideoCapture(2)
 	if not cap.isOpened():
-		print("Não foi possível abrir a câmera.")
+		print('Não foi possível abrir a câmera.')
 		exit(1)
 
 	print("Pressione 'q' para sair.")
@@ -64,23 +97,21 @@ if __name__ == "__main__":
 		if not ret:
 			break
 
-		img_array = preprocess_frame(frame)
-		predictions = predict_tflite(interpreter, img_array)
-
-		# Se predictions for uma tupla de 3, desenha boxes
-		if isinstance(predictions, tuple) and len(predictions) == 3:
-			boxes, classes_pred, scores = predictions
-			print("boxes:", boxes)
-			print("classes_pred:", classes_pred)
-			print("scores:", scores)
-			frame = draw_boxes(frame, boxes[0], classes_pred[0], scores[0], classes)
+		img_array = preprocess_frame(frame, input_size)
+		if args.keras:
+			predictions = predict_keras(model, img_array)
 		else:
-			# fallback: só classificação
-			print("predictions:", predictions)
-			pred_class = np.argmax(predictions)
-			conf = np.max(predictions)
-			label = f"{classes[pred_class]}: {conf*100:.1f}%"
-			cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+			predictions = predict_tflite(interpreter, img_array)
+
+		predictions = np.squeeze(predictions)
+		pred_class = int(np.argmax(predictions))
+		conf = float(np.max(predictions))
+		class_name = classes[pred_class] if pred_class < len(classes) else f'class_{pred_class}'
+  
+		if (conf >= 0.6):
+			label = f"{class_name}: {conf * 100:.1f}%"
+			frame = draw_label(frame, label)
+			print(label)
 
 		cv2.imshow('EfficientDet Real-Time', frame)
 		if cv2.waitKey(1) & 0xFF == ord('q'):

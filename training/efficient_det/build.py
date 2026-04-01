@@ -115,19 +115,35 @@ model.compile(optimizer='adam',
               loss='sparse_categorical_crossentropy',
               metrics=['accuracy'])
 
+os.makedirs('models', exist_ok=True)
+checkpoint = tf.keras.callbacks.ModelCheckpoint(
+    filepath='models/efficient_det.keras',
+    monitor='val_accuracy',
+    save_best_only=True,
+    save_weights_only=False,
+    verbose=1,
+)
+
 history = model.fit(
     train_dataset,
     validation_data=val_dataset,
-    epochs=10
+    epochs=10,
+    callbacks=[checkpoint]
 )
 
-# Converte o modelo para TFLite e salva ambos em ./models
-os.makedirs('models', exist_ok=True)
-converter = tf.lite.TFLiteConverter.from_keras_model(model)
-tflite_model = converter.convert()
-with open("models/efficient_det.tflite", "wb") as f:
-    f.write(tflite_model)
-print("Modelo convertido para models/efficient_det.tflite com sucesso!")
-
+# Salva o modelo Keras antes da conversão TFLite para não perder o artefato principal
 model.save('models/efficient_det.keras')
 print("Modelo salvo em models/efficient_det.keras com sucesso!")
+
+export_tflite = os.environ.get('EXPORT_TFLITE', '0') == '1'
+if export_tflite:
+    try:
+        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        tflite_model = converter.convert()
+        with open("models/efficient_det.tflite", "wb") as f:
+            f.write(tflite_model)
+        print("Modelo convertido para models/efficient_det.tflite com sucesso!")
+    except Exception as e:
+        print(f"Aviso: falha ao converter para TFLite: {e}")
+else:
+    print("Exportação TFLite desativada. Defina EXPORT_TFLITE=1 para gerar models/efficient_det.tflite.")
