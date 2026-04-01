@@ -8,3 +8,4 @@ captures
 .externalNativeBuild
 .cxx
 *.jpeg
+/training/efficient_det/data/

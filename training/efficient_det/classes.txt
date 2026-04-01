@@ -1,0 +1,6 @@
+bus
+cars
+cats
+chairs
+dogs
+doors

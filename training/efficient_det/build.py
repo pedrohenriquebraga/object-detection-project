@@ -5,8 +5,36 @@ from tensorflow.keras.models import Model
 import os
 import tensorflow as tf
 
+
+def list_class_names(directory):
+    if not os.path.isdir(directory):
+        return []
+
+    return sorted(
+        entry
+        for entry in os.listdir(directory)
+        if os.path.isdir(os.path.join(directory, entry)) and not entry.startswith('.')
+    )
+
+
+def save_classes_file(base_dir, output_file):
+    train_classes = list_class_names(os.path.join(base_dir, 'train'))
+    val_classes = list_class_names(os.path.join(base_dir, 'val'))
+    all_classes = sorted(set(train_classes) | set(val_classes))
+
+    with open(output_file, 'w') as f:
+        for class_name in all_classes:
+            f.write(f"{class_name}\n")
+
+    if set(train_classes) != set(val_classes):
+        print('Aviso: classes diferentes entre train e val. classes.txt foi salvo com a uniao das classes encontradas.')
+
+    print(f"classes.txt atualizado com {len(all_classes)} classes encontradas em {base_dir}.")
+    print(f"Numero de classes usadas no treino (data/train): {len(train_classes)}")
+    return train_classes
+
 def resize_image(image, label):
-    image = tf.image.resize(image, (320, 320))
+    image = tf.image.resize(image, (512, 512))
     return image, label
 
 gpus = tf.config.list_physical_devices('GPU')
@@ -44,8 +72,12 @@ for root, dirs, files in os.walk(base_dir):
 train_dir = './data/train'
 val_dir = './data/val'
 
+train_class_names = save_classes_file(base_dir, 'classes.txt')
+if not train_class_names:
+    raise ValueError('Nenhuma classe encontrada em ./data/train. Verifique a estrutura do dataset.')
+
 batch_size = 32
-img_size = (320, 320)
+img_size = (512, 512)
 
 train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
     train_dir, image_size=img_size, batch_size=batch_size)
@@ -68,13 +100,13 @@ def preprocess(images, labels):
 train_dataset = train_dataset.map(preprocess)
 val_dataset = val_dataset.map(preprocess)
 
-base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(320, 320, 3))
+base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(512, 512, 3))
 base_model.trainable = False  # Freeze base model for transfer learning
 
 x = GlobalAveragePooling2D()(base_model.output)
 x = Dropout(0.2)(x)
 
-num_classes = 5  # cars, cats, chairs, dogs, doors
+num_classes = len(train_class_names)
 output = Dense(num_classes, activation='softmax')(x)
 
 model = Model(inputs=base_model.input, outputs=output)
