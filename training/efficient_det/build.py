@@ -78,7 +78,8 @@ if not train_class_names:
 
 batch_size = 4
 img_size = (512, 512)
-epochs = 100
+epochs = 30
+AUTOTUNE = tf.data.AUTOTUNE
 
 train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
     train_dir, image_size=img_size, batch_size=batch_size)
@@ -88,18 +89,96 @@ val_dataset = tf.keras.preprocessing.image_dataset_from_directory(
     val_dir, image_size=img_size, batch_size=batch_size)
 val_dataset = val_dataset.map(resize_image)
 
-# Data augmentation
-data_augmentation = tf.keras.Sequential([
-    tf.keras.layers.RandomFlip('horizontal'),
-    tf.keras.layers.RandomRotation(0.2),
-])
+rotation_layer = tf.keras.layers.RandomRotation(0.2, fill_mode='reflect')
 
 def preprocess(images, labels):
     images = tf.keras.applications.efficientnet.preprocess_input(images)
     return images, labels
 
-train_dataset = train_dataset.map(preprocess)
-val_dataset = val_dataset.map(preprocess)
+
+def maybe_grayscale(image, probability=0.35):
+    return tf.cond(
+        tf.random.uniform([]) < probability,
+        lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(image)),
+        lambda: image,
+    )
+
+
+def random_zoom_crop(image, min_scale=0.75, max_scale=0.95):
+    image_shape = tf.shape(image)
+    height = image_shape[0]
+    width = image_shape[1]
+    channels = image_shape[2]
+
+    scale = tf.random.uniform([], min_scale, max_scale)
+    crop_height = tf.maximum(1, tf.cast(tf.cast(height, tf.float32) * scale, tf.int32))
+    crop_width = tf.maximum(1, tf.cast(tf.cast(width, tf.float32) * scale, tf.int32))
+    offset_height = tf.random.uniform([], 0, height - crop_height + 1, dtype=tf.int32)
+    offset_width = tf.random.uniform([], 0, width - crop_width + 1, dtype=tf.int32)
+
+    image = tf.image.crop_to_bounding_box(image, offset_height, offset_width, crop_height, crop_width)
+    image = tf.image.resize(image, img_size)
+    image.set_shape([img_size[0], img_size[1], 3])
+    return image
+
+
+def random_cutout(image, min_fraction=0.12, max_fraction=0.35):
+    image_shape = tf.shape(image)
+    height = image_shape[0]
+    width = image_shape[1]
+    channels = image_shape[2]
+
+    cutout_fraction = tf.random.uniform([], min_fraction, max_fraction)
+    cutout_height = tf.maximum(1, tf.cast(tf.cast(height, tf.float32) * cutout_fraction, tf.int32))
+    cutout_width = tf.maximum(1, tf.cast(tf.cast(width, tf.float32) * cutout_fraction, tf.int32))
+    offset_height = tf.random.uniform([], 0, height - cutout_height + 1, dtype=tf.int32)
+    offset_width = tf.random.uniform([], 0, width - cutout_width + 1, dtype=tf.int32)
+
+    cutout_mask = tf.ones([cutout_height, cutout_width, channels], dtype=image.dtype)
+    cutout_mask = tf.pad(
+        cutout_mask,
+        [[offset_height, height - offset_height - cutout_height],
+         [offset_width, width - offset_width - cutout_width],
+         [0, 0]],
+        constant_values=0,
+    )
+    return image * (1.0 - cutout_mask)
+
+
+def augment_single_image(image):
+    image = tf.cast(image, tf.float32)
+    image = rotation_layer(tf.expand_dims(image, axis=0), training=True)[0]
+    image = maybe_grayscale(image)
+    image = random_zoom_crop(image)
+    image = random_cutout(image)
+    return image
+
+
+def augment_image(images, labels):
+    images = tf.map_fn(
+        augment_single_image,
+        images,
+        fn_output_signature=tf.TensorSpec(shape=(img_size[0], img_size[1], 3), dtype=tf.float32),
+    )
+    return images, labels
+
+
+calibration_dataset = train_dataset.map(preprocess, num_parallel_calls=AUTOTUNE)
+
+train_dataset = (
+    train_dataset
+    .shuffle(1000, reshuffle_each_iteration=True)
+    .map(augment_image, num_parallel_calls=AUTOTUNE)
+    .map(preprocess, num_parallel_calls=AUTOTUNE)
+    .prefetch(AUTOTUNE)
+)
+
+val_dataset = val_dataset.map(preprocess, num_parallel_calls=AUTOTUNE).prefetch(AUTOTUNE)
+
+
+def representative_dataset():
+    for images, _ in calibration_dataset.unbatch().take(100):
+        yield [tf.expand_dims(tf.cast(images, tf.float32), axis=0)]
 
 base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(512, 512, 3))
 base_model.trainable = False  # Freeze base model for transfer learning
@@ -138,6 +217,11 @@ export_tflite = True
 if export_tflite:
     try:
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        converter.representative_dataset = representative_dataset
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+        converter.inference_input_type = tf.int8
+        converter.inference_output_type = tf.int8
         tflite_model = converter.convert()
         with open("models/efficient_det.tflite", "wb") as f:
             f.write(tflite_model)
@@ -145,4 +229,4 @@ if export_tflite:
     except Exception as e:
         print(f"Aviso: falha ao converter para TFLite: {e}")
 else:
-    print("Exportação TFLite desativada. Defina EXPORT_TFLITE=1 para gerar models/efficient_det.tflite.")
+    print("Exportação TFLite desativada. Defina para gerar models/efficient_det.tflite.")

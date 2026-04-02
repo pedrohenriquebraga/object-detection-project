@@ -1,6 +1,6 @@
-bus
-cars
-cats
-chairs
-dogs
-doors
+onibus
+carro
+gato
+cadeira
+cachorro
+porta

@@ -30,16 +30,39 @@ def preprocess_frame(frame, target_size):
 	return img
 
 
+def quantize_input(img_array, input_details):
+	input_dtype = input_details[0]['dtype']
+	if input_dtype == np.int8 or input_dtype == np.uint8:
+		scale, zero_point = input_details[0]['quantization']
+		if scale == 0:
+			return img_array.astype(input_dtype)
+		quantized = np.round(img_array / scale + zero_point)
+		info = np.iinfo(input_dtype)
+		return np.clip(quantized, info.min, info.max).astype(input_dtype)
+	return img_array.astype(input_dtype)
+
+
+def dequantize_output(output_array, output_details):
+	output_dtype = output_details[0]['dtype']
+	if output_dtype == np.int8 or output_dtype == np.uint8:
+		scale, zero_point = output_details[0]['quantization']
+		if scale == 0:
+			return output_array.astype(np.float32)
+		return (output_array.astype(np.float32) - zero_point) * scale
+	return output_array.astype(np.float32)
+
+
 def predict_tflite(interpreter, img_array):
 	input_details = interpreter.get_input_details()
-	input_dtype = input_details[0]['dtype']
-	input_tensor = img_array.astype(input_dtype)
+	input_tensor = quantize_input(img_array, input_details)
 	if len(input_details[0]['shape']) == 4 and input_details[0]['shape'][0] == 1:
 		interpreter.set_tensor(input_details[0]['index'], input_tensor)
 	else:
 		interpreter.set_tensor(input_details[0]['index'], np.resize(input_tensor, input_details[0]['shape']))
 	interpreter.invoke()
-	return interpreter.get_tensor(interpreter.get_output_details()[0]['index'])
+	output_details = interpreter.get_output_details()
+	output_tensor = interpreter.get_tensor(output_details[0]['index'])
+	return dequantize_output(output_tensor, output_details)
 
 
 def predict_keras(model, img_array):
