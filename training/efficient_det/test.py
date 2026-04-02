@@ -78,13 +78,9 @@ if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description="EfficientDet real-time classification (Keras or TFLite)")
 	parser.add_argument('--keras', action='store_true', help='Use Keras model for real-time inference')
 	parser.add_argument('--tflite', action='store_true', help='Use TFLite model for real-time inference')
-	parser.add_argument('--model-path', type=str, default=None, help='Path to the model file')
-	parser.add_argument('--camera', type=int, default=0, help='Camera index (default 0)')
 	args = parser.parse_args()
 
 	classes = load_classes('./classes.txt')
-	if not classes:
-		classes = ['bus', 'cars', 'cats', 'chairs', 'dogs', 'doors']
 
 	if args.keras and args.tflite:
 		print('Escolha apenas um backend: --keras ou --tflite.')
@@ -131,7 +127,7 @@ if __name__ == "__main__":
 		conf = float(np.max(predictions))
 		class_name = classes[pred_class + 1] if pred_class < len(classes) else f'class_{pred_class}'
   
-		if (conf >= 0.6):
+		if (conf >= 0.75):
 			label = f"{class_name}: {conf * 100:.1f}%"
 			frame = draw_label(frame, label)
 			print(label)

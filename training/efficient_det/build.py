@@ -5,6 +5,8 @@ from tensorflow.keras.models import Model
 import os
 import tensorflow as tf
 
+gpus = tf.config.list_physical_devices('GPU')
+export_tflite = True
 
 def list_class_names(directory):
     if not os.path.isdir(directory):
@@ -15,7 +17,6 @@ def list_class_names(directory):
         for entry in os.listdir(directory)
         if os.path.isdir(os.path.join(directory, entry)) and not entry.startswith('.')
     )
-
 
 def save_classes_file(base_dir, output_file):
     train_classes = list_class_names(os.path.join(base_dir, 'train'))
@@ -37,18 +38,6 @@ def resize_image(image, label):
     image = tf.image.resize(image, (512, 512))
     return image, label
 
-gpus = tf.config.list_physical_devices('GPU')
-if gpus:
-    try:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        print(f"GPUs disponíveis: {gpus}")
-    except RuntimeError as e:
-        print(f"Erro ao configurar GPU: {e}")
-else:
-    print("Nenhuma GPU encontrada. O treinamento será feito na CPU.")
-    
-    
 def check_image_validity(image_path):
     try:
         img = tf.io.read_file(image_path)
@@ -60,36 +49,6 @@ def check_image_validity(image_path):
     except Exception as e:
         print(f"Error with image {image_path}: {e}")
         return False
-
-# Validate images in the dataset
-base_dir = './data'
-for root, dirs, files in os.walk(base_dir):
-    for file in files:
-        file_path = os.path.join(root, file)
-        if not check_image_validity(file_path):
-            os.remove(file_path)
-
-train_dir = './data/train'
-val_dir = './data/val'
-
-train_class_names = save_classes_file(base_dir, 'classes.txt')
-if not train_class_names:
-    raise ValueError('Nenhuma classe encontrada em ./data/train. Verifique a estrutura do dataset.')
-
-batch_size = 4
-img_size = (512, 512)
-epochs = 30
-AUTOTUNE = tf.data.AUTOTUNE
-
-train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    train_dir, image_size=img_size, batch_size=batch_size)
-train_dataset = train_dataset.map(resize_image)
-
-val_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    val_dir, image_size=img_size, batch_size=batch_size)
-val_dataset = val_dataset.map(resize_image)
-
-rotation_layer = tf.keras.layers.RandomRotation(0.2, fill_mode='reflect')
 
 def preprocess(images, labels):
     images = tf.keras.applications.efficientnet.preprocess_input(images)
@@ -162,7 +121,50 @@ def augment_image(images, labels):
     )
     return images, labels
 
+def representative_dataset():
+    for images, _ in calibration_dataset.unbatch().take(100):
+        yield [tf.expand_dims(tf.cast(images, tf.float32), axis=0)]
 
+
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"GPUs disponíveis: {gpus}")
+    except RuntimeError as e:
+        print(f"Erro ao configurar GPU: {e}")
+else:
+    print("Nenhuma GPU encontrada. O treinamento será feito na CPU.")
+    
+
+base_dir = './data'
+for root, dirs, files in os.walk(base_dir):
+    for file in files:
+        file_path = os.path.join(root, file)
+        if not check_image_validity(file_path):
+            os.remove(file_path)
+
+train_dir = './data/train'
+val_dir = './data/val'
+
+train_class_names = save_classes_file(base_dir, 'classes.txt')
+if not train_class_names:
+    raise ValueError('Nenhuma classe encontrada em ./data/train. Verifique a estrutura do dataset.')
+
+batch_size = 4
+img_size = (512, 512)
+epochs = 30
+AUTOTUNE = tf.data.AUTOTUNE
+
+train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
+    train_dir, image_size=img_size, batch_size=batch_size)
+train_dataset = train_dataset.map(resize_image)
+
+val_dataset = tf.keras.preprocessing.image_dataset_from_directory(
+    val_dir, image_size=img_size, batch_size=batch_size)
+val_dataset = val_dataset.map(resize_image)
+
+rotation_layer = tf.keras.layers.RandomRotation(0.2, fill_mode='reflect')
 calibration_dataset = train_dataset.map(preprocess, num_parallel_calls=AUTOTUNE)
 
 train_dataset = (
@@ -174,11 +176,6 @@ train_dataset = (
 )
 
 val_dataset = val_dataset.map(preprocess, num_parallel_calls=AUTOTUNE).prefetch(AUTOTUNE)
-
-
-def representative_dataset():
-    for images, _ in calibration_dataset.unbatch().take(100):
-        yield [tf.expand_dims(tf.cast(images, tf.float32), axis=0)]
 
 base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(512, 512, 3))
 base_model.trainable = False  # Freeze base model for transfer learning
@@ -213,7 +210,6 @@ history = model.fit(
 model.save('models/efficient_det.keras')
 print("Modelo salvo em models/efficient_det.keras com sucesso!")
 
-export_tflite = True
 if export_tflite:
     try:
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
