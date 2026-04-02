@@ -1,6 +1,11 @@
-onibus
-carro
-gato
-cadeira
-cachorro
-porta
+bus
+cars
+cats
+chairs
+dogs
+doors
+fridges
+persons
+stairs
+tables
+tv

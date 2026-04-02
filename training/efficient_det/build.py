@@ -3,10 +3,30 @@ from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D
 from tensorflow.keras.models import Model
 
 import os
+from datetime import datetime
 import tensorflow as tf
 
+batch_size = 16
+img_size = (320, 320)
+epochs = 75
+AUTOTUNE = tf.data.AUTOTUNE
+
 gpus = tf.config.list_physical_devices('GPU')
-export_tflite = True
+tflite_quantization = os.getenv('TFLITE_QUANTIZATION', 'int8').strip().lower()
+
+base_dir = './data'
+train_dir = './data/train'
+val_dir = './data/val'
+            
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"GPUs disponíveis: {gpus}")
+    except RuntimeError as e:
+        print(f"Erro ao configurar GPU: {e}")
+else:
+    print("Nenhuma GPU encontrada. O treinamento será feito na CPU.")
 
 def list_class_names(directory):
     if not os.path.isdir(directory):
@@ -35,7 +55,7 @@ def save_classes_file(base_dir, output_file):
     return train_classes
 
 def resize_image(image, label):
-    image = tf.image.resize(image, (512, 512))
+    image = tf.image.resize(image, img_size)
     return image, label
 
 def check_image_validity(image_path):
@@ -54,14 +74,12 @@ def preprocess(images, labels):
     images = tf.keras.applications.efficientnet.preprocess_input(images)
     return images, labels
 
-
 def maybe_grayscale(image, probability=0.35):
     return tf.cond(
         tf.random.uniform([]) < probability,
         lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(image)),
         lambda: image,
     )
-
 
 def random_zoom_crop(image, min_scale=0.75, max_scale=0.95):
     image_shape = tf.shape(image)
@@ -79,7 +97,6 @@ def random_zoom_crop(image, min_scale=0.75, max_scale=0.95):
     image = tf.image.resize(image, img_size)
     image.set_shape([img_size[0], img_size[1], 3])
     return image
-
 
 def random_cutout(image, min_fraction=0.12, max_fraction=0.35):
     image_shape = tf.shape(image)
@@ -103,7 +120,6 @@ def random_cutout(image, min_fraction=0.12, max_fraction=0.35):
     )
     return image * (1.0 - cutout_mask)
 
-
 def augment_single_image(image):
     image = tf.cast(image, tf.float32)
     image = rotation_layer(tf.expand_dims(image, axis=0), training=True)[0]
@@ -111,7 +127,6 @@ def augment_single_image(image):
     image = random_zoom_crop(image)
     image = random_cutout(image)
     return image
-
 
 def augment_image(images, labels):
     images = tf.map_fn(
@@ -126,35 +141,27 @@ def representative_dataset():
         yield [tf.expand_dims(tf.cast(images, tf.float32), axis=0)]
 
 
-if gpus:
-    try:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        print(f"GPUs disponíveis: {gpus}")
-    except RuntimeError as e:
-        print(f"Erro ao configurar GPU: {e}")
-else:
-    print("Nenhuma GPU encontrada. O treinamento será feito na CPU.")
-    
+def next_model_path(models_dir, base_name, extension, run_id):
+    candidate = os.path.join(models_dir, f"{base_name}_{run_id}.{extension}")
+    if not os.path.exists(candidate):
+        return candidate
 
-base_dir = './data'
+    idx = 1
+    while True:
+        candidate = os.path.join(models_dir, f"{base_name}_{run_id}_{idx}.{extension}")
+        if not os.path.exists(candidate):
+            return candidate
+        idx += 1
+
 for root, dirs, files in os.walk(base_dir):
     for file in files:
         file_path = os.path.join(root, file)
         if not check_image_validity(file_path):
             os.remove(file_path)
 
-train_dir = './data/train'
-val_dir = './data/val'
-
 train_class_names = save_classes_file(base_dir, 'classes.txt')
 if not train_class_names:
     raise ValueError('Nenhuma classe encontrada em ./data/train. Verifique a estrutura do dataset.')
-
-batch_size = 4
-img_size = (512, 512)
-epochs = 30
-AUTOTUNE = tf.data.AUTOTUNE
 
 train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
     train_dir, image_size=img_size, batch_size=batch_size)
@@ -177,7 +184,7 @@ train_dataset = (
 
 val_dataset = val_dataset.map(preprocess, num_parallel_calls=AUTOTUNE).prefetch(AUTOTUNE)
 
-base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(512, 512, 3))
+base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(320, 320, 3))
 base_model.trainable = False  # Freeze base model for transfer learning
 
 x = GlobalAveragePooling2D()(base_model.output)
@@ -193,36 +200,30 @@ model.compile(optimizer='adam',
               metrics=['accuracy'])
 
 os.makedirs('models', exist_ok=True)
-checkpoint = tf.keras.callbacks.ModelCheckpoint(
-    filepath='models/efficient_det.keras',
-    monitor='val_accuracy',
-    save_best_only=True,
-    save_weights_only=False,
+run_id = datetime.now().strftime('%Y%m%d-%H%M%S')
+log_dir = os.path.join('logs', 'fit', run_id)
+tensorboard_callback = tf.keras.callbacks.TensorBoard(
+    log_dir=log_dir,
+    histogram_freq=1,
+    write_graph=True,
 )
+# checkpoint = tf.keras.callbacks.ModelCheckpoint(
+#     filepath='models/efficient_det.keras',
+#     monitor='val_accuracy',
+#     save_best_only=True,
+#     save_weights_only=False,
+# )
 
 history = model.fit(
     train_dataset,
     validation_data=val_dataset,
     epochs=epochs,
-    callbacks=[checkpoint]
+    callbacks=[tensorboard_callback ] # checkpoint aqui
 )
 
-model.save('models/efficient_det.keras')
-print("Modelo salvo em models/efficient_det.keras com sucesso!")
+print(f"TensorBoard logs salvos em: {log_dir}")
+print(f"Execute: tensorboard --logdir {os.path.join('logs', 'fit')}")
 
-if export_tflite:
-    try:
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.representative_dataset = representative_dataset
-        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-        converter.inference_input_type = tf.int8
-        converter.inference_output_type = tf.int8
-        tflite_model = converter.convert()
-        with open("models/efficient_det.tflite", "wb") as f:
-            f.write(tflite_model)
-        print("Modelo convertido para models/efficient_det.tflite com sucesso!")
-    except Exception as e:
-        print(f"Aviso: falha ao converter para TFLite: {e}")
-else:
-    print("Exportação TFLite desativada. Defina para gerar models/efficient_det.tflite.")
+keras_output_path = next_model_path('models', 'efficient_det', 'keras', run_id)
+model.save(keras_output_path)
+print(f"Modelo salvo em {keras_output_path} com sucesso!")

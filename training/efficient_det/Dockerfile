@@ -23,6 +23,8 @@ RUN pip install --upgrade pip \
 COPY build.py ./
 
 RUN mkdir -p /app/models /app/data
-VOLUME ["/app/models", "/app/data"]
+VOLUME ["/app/models", "/app/data", "/app/logs"]
+
+EXPOSE 6006
 
 CMD ["python", "build.py"]

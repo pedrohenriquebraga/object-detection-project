@@ -14,6 +14,36 @@ def load_classes(classes_path):
 		return [line.strip() for line in f if line.strip()]
 
 
+def find_latest_model(models_dir, extension, contains=None):
+	if not os.path.isdir(models_dir):
+		return None
+
+	candidates = []
+	for file_name in os.listdir(models_dir):
+		if not file_name.endswith(f'.{extension}'):
+			continue
+		if contains and contains not in file_name:
+			continue
+		candidates.append(os.path.join(models_dir, file_name))
+
+	if not candidates:
+		return None
+
+	candidates.sort(key=os.path.getmtime, reverse=True)
+	return candidates[0]
+
+
+def get_default_model_path(use_keras):
+	if use_keras:
+		return find_latest_model('./models', 'keras') or './models/efficient_det.keras'
+
+	builtin_model = find_latest_model('./models', 'tflite', contains='_builtin_')
+	if builtin_model is not None:
+		return builtin_model
+
+	return find_latest_model('./models', 'tflite') or './models/efficient_det.tflite'
+
+
 def get_model_input_size(model_input_shape, fallback=(512, 512)):
 	if len(model_input_shape) >= 3:
 		height = model_input_shape[1] or fallback[0]
@@ -78,6 +108,8 @@ if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description="EfficientDet real-time classification (Keras or TFLite)")
 	parser.add_argument('--keras', action='store_true', help='Use Keras model for real-time inference')
 	parser.add_argument('--tflite', action='store_true', help='Use TFLite model for real-time inference')
+	parser.add_argument('--camera', type=int, default=0, help='Camera index (default: 0)')
+	parser.add_argument('--model', type=str, default=None, help='Custom model path (optional)')
 	args = parser.parse_args()
 
 	classes = load_classes('./classes.txt')
@@ -86,28 +118,43 @@ if __name__ == "__main__":
 		print('Escolha apenas um backend: --keras ou --tflite.')
 		exit(1)
 
+	default_model_path = get_default_model_path(args.keras)
+	# Se nenhum backend for informado, usa TFLite por padrão.
 	if not args.keras and not args.tflite:
-		if args.model_path and args.model_path.endswith('.keras'):
-			args.keras = True
-		else:
-			args.tflite = True
+		args.tflite = True
 
-	model_path = args.model_path
-	if not model_path:
-		model_path = './models/efficient_det.keras' if args.keras else './models/efficient_det.tflite'
+	model_path = args.model or default_model_path
+	if not os.path.exists(model_path):
+		print(f"Modelo não encontrado: {model_path}")
+		exit(1)
 
 	if args.keras:
 		model = tf.keras.models.load_model(model_path)
 		input_size = get_model_input_size(model.input_shape)
 	else:
-		interpreter = tf.lite.Interpreter(model_path=model_path)
-		interpreter.allocate_tensors()
+		try:
+			# Carrega interpretador TFLite
+			print(f"Carregando modelo TFLite: {model_path}")
+			interpreter = tf.lite.Interpreter(model_path=model_path)
+			interpreter.allocate_tensors()
+			print("✓ Modelo TFLite carregado com sucesso!")
+		except RuntimeError as e:
+			if "Select TensorFlow op" in str(e):
+				print("\n⚠️  AVISO: O modelo TFLite atual usa SELECT_TF_OPS (Flex Delegate).")
+				print("   Para rodar sem Flex, reconverta com runtime builtin:")
+				print("   ./convert.sh dynamic builtin")
+				print("   ou")
+				print("   python3 convert.py --quantization dynamic --runtime builtin")
+				exit(1)
+			else:
+				raise e
+		
 		input_details = interpreter.get_input_details()
 		input_size = get_model_input_size(input_details[0]['shape'])
 
-	cap = cv2.VideoCapture(2)
+	cap = cv2.VideoCapture(args.camera)
 	if not cap.isOpened():
-		print('Não foi possível abrir a câmera.')
+		print(f'Não foi possível abrir a câmera no índice {args.camera}.')
 		exit(1)
 
 	print("Pressione 'q' para sair.")
@@ -125,7 +172,7 @@ if __name__ == "__main__":
 		predictions = np.squeeze(predictions)
 		pred_class = int(np.argmax(predictions))
 		conf = float(np.max(predictions))
-		class_name = classes[pred_class + 1] if pred_class < len(classes) else f'class_{pred_class}'
+		class_name = classes[pred_class] if pred_class < len(classes) else f'class_{pred_class}'
   
 		if (conf >= 0.75):
 			label = f"{class_name}: {conf * 100:.1f}%"
