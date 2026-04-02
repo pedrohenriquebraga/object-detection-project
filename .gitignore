@@ -11,3 +11,4 @@ captures
 /training/efficient_det/data/
 __pycache__
 command.txt
+logs
