@@ -99,9 +99,48 @@ def predict_keras(model, img_array):
 	return model.predict(img_array, verbose=0)
 
 
-def draw_label(frame, label):
-	cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+def draw_label(frame, label, color=(0, 255, 0), position=(10, 30)):
+	cv2.putText(frame, label, position, cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 	return frame
+
+
+def predict_with_confidence(model, img_array, classes, confidence_threshold=0.5):
+	"""
+	Faz predição e retorna resultado com análise de confiança.
+	
+	Returns:
+		dict: {
+			'class': str (predição ou 'OOD' se baixa confiança),
+			'confidence': float (0-1),
+			'is_ood': bool (True se possível Out-of-Distribution),
+			'top_3': list de tuples (class_name, confidence)
+		}
+	"""
+	predictions = predict_keras(model, img_array)
+	predictions = np.squeeze(predictions)
+	
+	top_3_indices = np.argsort(predictions)[::-1][:3]
+	top_3 = [(classes[i], float(predictions[i])) for i in top_3_indices if i < len(classes)]
+	
+	pred_class_idx = int(np.argmax(predictions))
+	pred_class = classes[pred_class_idx] if pred_class_idx < len(classes) else f'class_{pred_class_idx}'
+	confidence = float(np.max(predictions))
+	
+	# Detecta OOD: confiança muito baixa ou predição ambígua
+	is_ood = confidence < confidence_threshold
+	
+	# Detecta também se as duas classes top estão muito próximas (ambíguo)
+	if len(top_3) > 1:
+		conf_gap = top_3[0][1] - top_3[1][1]
+		if conf_gap < 0.15:  # Gap muito pequeno = ambíguo
+			is_ood = True
+	
+	return {
+		'class': pred_class,
+		'confidence': confidence,
+		'is_ood': is_ood,
+		'top_3': top_3
+	}
 
 
 if __name__ == "__main__":
@@ -110,6 +149,10 @@ if __name__ == "__main__":
 	parser.add_argument('--tflite', action='store_true', help='Use TFLite model for real-time inference')
 	parser.add_argument('--camera', type=int, default=0, help='Camera index (default: 0)')
 	parser.add_argument('--model', type=str, default=None, help='Custom model path (optional)')
+	parser.add_argument('--threshold', type=float, default=0.5, 
+		help='Confidence threshold para aceitar predição (0-1, default: 0.5)')
+	parser.add_argument('--reject-ood', action='store_true', 
+		help='Rejeitar predições Out-of-Distribution (OOD). Se ativado, não mostra predições baixa confiança')
 	args = parser.parse_args()
 
 	classes = load_classes('./classes.txt')
@@ -157,27 +200,52 @@ if __name__ == "__main__":
 		print(f'Não foi possível abrir a câmera no índice {args.camera}.')
 		exit(1)
 
-	print("Pressione 'q' para sair.")
+	print(f"\n⚙️  Configuração:")
+	print(f"   Threshold de confiança: {args.threshold*100:.0f}%")
+	print(f"   Rejeitar OOD: {'SIM' if args.reject_ood else 'NÃO'}")
+	print(f"   Pressione 'q' para sair.\n")
+	
 	while True:
 		ret, frame = cap.read()
 		if not ret:
 			break
 
 		img_array = preprocess_frame(frame, input_size)
+		
 		if args.keras:
-			predictions = predict_keras(model, img_array)
+			# Para Keras, usar função com análise de confiança
+			result = predict_with_confidence(model, img_array, classes, args.threshold)
+			pred_class = result['class']
+			confidence = result['confidence']
+			is_ood = result['is_ood']
+			top_3 = result['top_3']
 		else:
+			# Para TFLite, usar função original
 			predictions = predict_tflite(interpreter, img_array)
+			predictions = np.squeeze(predictions)
+			pred_class_idx = int(np.argmax(predictions))
+			pred_class = classes[pred_class_idx] if pred_class_idx < len(classes) else f'class_{pred_class_idx}'
+			confidence = float(np.max(predictions))
+			is_ood = confidence < args.threshold
+			top_3 = None
 
-		predictions = np.squeeze(predictions)
-		pred_class = int(np.argmax(predictions))
-		conf = float(np.max(predictions))
-		class_name = classes[pred_class] if pred_class < len(classes) else f'class_{pred_class}'
-  
-		if (conf >= 0.75):
-			label = f"{class_name}: {conf * 100:.1f}%"
-			frame = draw_label(frame, label)
-			print(label)
+		# Decisão de exibição
+		should_display = True
+		label_color = (0, 255, 0)  # Verde
+		
+		if is_ood:
+			should_display = args.reject_ood is False  # Exibe APENAS se reject_ood for False
+			label_color = (0, 165, 255)  # Laranja
+			display_label = f"{pred_class}: {confidence*100:.1f}% (OOD)"
+		else:
+			display_label = f"{pred_class}: {confidence*100:.1f}%"
+		
+		if should_display:
+			frame = draw_label(frame, display_label, color=label_color)
+			print(display_label)
+		else:
+			# Se reject_ood está ativado e é OOD, mostra aviso em vermelho
+			frame = draw_label(frame, "⚠️ OOD - Rejeita", color=(0, 0, 255), position=(10, 60))
 
 		cv2.imshow('EfficientDet Real-Time', frame)
 		if cv2.waitKey(1) & 0xFF == ord('q'):
