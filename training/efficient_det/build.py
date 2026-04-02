@@ -116,22 +116,20 @@ model.compile(optimizer='adam',
               metrics=['accuracy'])
 
 os.makedirs('models', exist_ok=True)
-checkpoint = tf.keras.callbacks.ModelCheckpoint(
-    filepath='models/efficient_det.keras',
-    monitor='val_accuracy',
-    save_best_only=True,
-    save_weights_only=False,
-    verbose=1,
-)
+# checkpoint = tf.keras.callbacks.ModelCheckpoint(
+#     filepath='models/efficient_det.keras',
+#     monitor='val_accuracy',
+#     save_best_only=True,
+#     save_weights_only=False,
+# )
 
 history = model.fit(
     train_dataset,
     validation_data=val_dataset,
     epochs=10,
-    callbacks=[checkpoint]
+    # callbacks=[checkpoint]
 )
 
-# Salva o modelo Keras antes da conversão TFLite para não perder o artefato principal
 model.save('models/efficient_det.keras')
 print("Modelo salvo em models/efficient_det.keras com sucesso!")
 
