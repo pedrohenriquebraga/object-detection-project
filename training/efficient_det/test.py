@@ -106,7 +106,7 @@ if __name__ == "__main__":
 		predictions = np.squeeze(predictions)
 		pred_class = int(np.argmax(predictions))
 		conf = float(np.max(predictions))
-		class_name = classes[pred_class] if pred_class < len(classes) else f'class_{pred_class}'
+		class_name = classes[pred_class + 1] if pred_class < len(classes) else f'class_{pred_class}'
   
 		if (conf >= 0.6):
 			label = f"{class_name}: {conf * 100:.1f}%"

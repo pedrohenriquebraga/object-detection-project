@@ -76,8 +76,9 @@ train_class_names = save_classes_file(base_dir, 'classes.txt')
 if not train_class_names:
     raise ValueError('Nenhuma classe encontrada em ./data/train. Verifique a estrutura do dataset.')
 
-batch_size = 32
+batch_size = 4
 img_size = (512, 512)
+epochs = 100
 
 train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
     train_dir, image_size=img_size, batch_size=batch_size)
@@ -116,24 +117,24 @@ model.compile(optimizer='adam',
               metrics=['accuracy'])
 
 os.makedirs('models', exist_ok=True)
-# checkpoint = tf.keras.callbacks.ModelCheckpoint(
-#     filepath='models/efficient_det.keras',
-#     monitor='val_accuracy',
-#     save_best_only=True,
-#     save_weights_only=False,
-# )
+checkpoint = tf.keras.callbacks.ModelCheckpoint(
+    filepath='models/efficient_det.keras',
+    monitor='val_accuracy',
+    save_best_only=True,
+    save_weights_only=False,
+)
 
 history = model.fit(
     train_dataset,
     validation_data=val_dataset,
-    epochs=10,
-    # callbacks=[checkpoint]
+    epochs=epochs,
+    callbacks=[checkpoint]
 )
 
 model.save('models/efficient_det.keras')
 print("Modelo salvo em models/efficient_det.keras com sucesso!")
 
-export_tflite = os.environ.get('EXPORT_TFLITE', '0') == '1'
+export_tflite = True
 if export_tflite:
     try:
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
