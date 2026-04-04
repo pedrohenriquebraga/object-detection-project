@@ -231,22 +231,13 @@ if __name__ == "__main__":
 
 		# Decisão de exibição
 		should_display = True
+		display_label = f"{pred_class}: {confidence*100:.1f}%"
+  
 		label_color = (0, 255, 0)  # Verde
-		
-		if is_ood:
-			should_display = args.reject_ood is False  # Exibe APENAS se reject_ood for False
-			label_color = (0, 165, 255)  # Laranja
-			display_label = f"{pred_class}: {confidence*100:.1f}% (OOD)"
-		else:
-			display_label = f"{pred_class}: {confidence*100:.1f}%"
-		
-		if should_display:
+		if confidence >= 0.6:
 			frame = draw_label(frame, display_label, color=label_color)
 			print(display_label)
-		else:
-			# Se reject_ood está ativado e é OOD, mostra aviso em vermelho
-			frame = draw_label(frame, "⚠️ OOD - Rejeita", color=(0, 0, 255), position=(10, 60))
-
+	
 		cv2.imshow('EfficientDet Real-Time', frame)
 		if cv2.waitKey(1) & 0xFF == ord('q'):
 			break

@@ -6,10 +6,12 @@ import os
 from datetime import datetime
 import tensorflow as tf
 
-batch_size = 16
-img_size = (320, 320)
-epochs = 75
+batch_size = 12
+img_size = (512, 512)
+epochs = 100
 AUTOTUNE = tf.data.AUTOTUNE
+early_stopping_patience = 8
+early_stopping_min_delta = 0.002
 
 gpus = tf.config.list_physical_devices('GPU')
 tflite_quantization = os.getenv('TFLITE_QUANTIZATION', 'int8').strip().lower()
@@ -202,14 +204,14 @@ train_dataset = (
 
 val_dataset = val_dataset.map(preprocess, num_parallel_calls=AUTOTUNE).prefetch(AUTOTUNE)
 
-base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(320, 320, 3))
+base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(512, 512, 3))
 base_model.trainable = False  # Freeze base model for transfer learning
 
 x = GlobalAveragePooling2D()(base_model.output)
 x = Dropout(0.2)(x)
 
 num_classes = len(train_class_names)
-output = Dense(num_classes, activation='softmax')(x)
+output = Dense(num_classes, activation='sigmoid')(x)
 
 model = Model(inputs=base_model.input, outputs=output)
 
@@ -234,6 +236,14 @@ tensorboard_callback = tf.keras.callbacks.TensorBoard(
     histogram_freq=1,
     write_graph=True,
 )
+early_stopping_callback = tf.keras.callbacks.EarlyStopping(
+    monitor='val_loss',
+    min_delta=early_stopping_min_delta,
+    patience=early_stopping_patience,
+    mode='min',
+    restore_best_weights=True,
+    verbose=1,
+)
 # checkpoint = tf.keras.callbacks.ModelCheckpoint(
 #     filepath='models/efficient_det.keras',
 #     monitor='val_accuracy',
@@ -246,7 +256,7 @@ history = model.fit(
     validation_data=val_dataset,
     epochs=epochs,
     class_weight=class_weights_dict,
-    callbacks=[tensorboard_callback ] # checkpoint aqui
+    callbacks=[tensorboard_callback, early_stopping_callback] # checkpoint aqui
 )
 
 print(f"TensorBoard logs salvos em: {log_dir}")

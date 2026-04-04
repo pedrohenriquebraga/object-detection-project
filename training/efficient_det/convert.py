@@ -73,7 +73,7 @@ def representative_dataset():
     base_dir = './data'
     train_dir = os.path.join(base_dir, 'train')
     img_size = (512, 512)
-    batch_size = 8
+    batch_size = 16
     
     if not os.path.exists(train_dir):
         print(f"Aviso: diretório {train_dir} não encontrado. Usando dataset vazio para quantização.")
