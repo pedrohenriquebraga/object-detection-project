@@ -234,7 +234,7 @@ if __name__ == "__main__":
 		display_label = f"{pred_class}: {confidence*100:.1f}%"
   
 		label_color = (0, 255, 0)  # Verde
-		if confidence >= 0.6:
+		if confidence >= 0.75:
 			frame = draw_label(frame, display_label, color=label_color)
 			print(display_label)
 	

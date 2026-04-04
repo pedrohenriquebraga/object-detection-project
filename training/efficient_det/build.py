@@ -6,15 +6,14 @@ import os
 from datetime import datetime
 import tensorflow as tf
 
-batch_size = 12
-img_size = (512, 512)
+batch_size = 16
+img_size = (256, 256)
 epochs = 100
 AUTOTUNE = tf.data.AUTOTUNE
 early_stopping_patience = 8
 early_stopping_min_delta = 0.002
 
 gpus = tf.config.list_physical_devices('GPU')
-tflite_quantization = os.getenv('TFLITE_QUANTIZATION', 'int8').strip().lower()
 
 base_dir = './data'
 train_dir = './data/train'
@@ -100,34 +99,11 @@ def random_zoom_crop(image, min_scale=0.75, max_scale=0.95):
     image.set_shape([img_size[0], img_size[1], 3])
     return image
 
-def random_cutout(image, min_fraction=0.12, max_fraction=0.35):
-    image_shape = tf.shape(image)
-    height = image_shape[0]
-    width = image_shape[1]
-    channels = image_shape[2]
-
-    cutout_fraction = tf.random.uniform([], min_fraction, max_fraction)
-    cutout_height = tf.maximum(1, tf.cast(tf.cast(height, tf.float32) * cutout_fraction, tf.int32))
-    cutout_width = tf.maximum(1, tf.cast(tf.cast(width, tf.float32) * cutout_fraction, tf.int32))
-    offset_height = tf.random.uniform([], 0, height - cutout_height + 1, dtype=tf.int32)
-    offset_width = tf.random.uniform([], 0, width - cutout_width + 1, dtype=tf.int32)
-
-    cutout_mask = tf.ones([cutout_height, cutout_width, channels], dtype=image.dtype)
-    cutout_mask = tf.pad(
-        cutout_mask,
-        [[offset_height, height - offset_height - cutout_height],
-         [offset_width, width - offset_width - cutout_width],
-         [0, 0]],
-        constant_values=0,
-    )
-    return image * (1.0 - cutout_mask)
-
 def augment_single_image(image):
     image = tf.cast(image, tf.float32)
     image = rotation_layer(tf.expand_dims(image, axis=0), training=True)[0]
     image = maybe_grayscale(image)
     image = random_zoom_crop(image)
-    image = random_cutout(image)
     return image
 
 def augment_image(images, labels):
@@ -204,7 +180,7 @@ train_dataset = (
 
 val_dataset = val_dataset.map(preprocess, num_parallel_calls=AUTOTUNE).prefetch(AUTOTUNE)
 
-base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(512, 512, 3))
+base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(256, 256, 3))
 base_model.trainable = False  # Freeze base model for transfer learning
 
 x = GlobalAveragePooling2D()(base_model.output)

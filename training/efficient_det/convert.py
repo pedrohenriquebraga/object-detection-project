@@ -1,17 +1,10 @@
-"""
-Script para converter modelo .keras para .tflite.
-
-Por padrao, gera modelo sem Flex Delegate usando apenas TFLITE_BUILTINS.
-
-Uso: python3 convert.py [--quantization float|float16|dynamic|int8] [--runtime builtin|flex|auto] [--input models/efficient_det.keras] [--output models/efficient_det.tflite]
-Exemplo: python3 convert.py --quantization dynamic --runtime builtin
-"""
-
 import os
 import sys
 import argparse
 from datetime import datetime
 import tensorflow as tf
+# import shutil
+# import tempfile
 
 
 def find_latest_model(models_dir, extension):
@@ -65,15 +58,32 @@ def resolve_output_model_path(output_model_path, input_model_path, quantization_
             return indexed_candidate
         idx += 1
 
-def representative_dataset():
-    """
-    Dataset representativo para quantização INT8.
-    Carrega imagens do dataset de treinamento.
-    """
+def detect_model_input_shape(model):
+    input_shape = model.input_shape
+
+    if isinstance(input_shape, list):
+        input_shape = input_shape[0]
+
+    if input_shape is None or len(input_shape) != 4:
+        raise ValueError(f"Shape de entrada invalido: {input_shape}")
+
+    _, height, width, channels = input_shape
+
+    if height is None or width is None:
+        raise ValueError(
+            "Nao foi possivel detectar resolucao fixa do modelo (height/width indefinidos)."
+        )
+
+    if channels is None:
+        channels = 3
+
+    return int(height), int(width), int(channels)
+
+
+def representative_dataset(img_size):
     base_dir = './data'
     train_dir = os.path.join(base_dir, 'train')
-    img_size = (512, 512)
-    batch_size = 16
+    batch_size = 4
     
     if not os.path.exists(train_dir):
         print(f"Aviso: diretório {train_dir} não encontrado. Usando dataset vazio para quantização.")
@@ -88,28 +98,18 @@ def representative_dataset():
     
     train_dataset = train_dataset.map(preprocess)
     
-    # Usa apenas 100 batches para quantização
-    for images, _ in train_dataset.unbatch().take(100):
+    for images, _ in train_dataset.unbatch().take(150):
         yield [tf.expand_dims(tf.cast(images, tf.float32), axis=0)]
 
 
-def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mode, runtime_mode):
-    """
-    Converte modelo Keras para TFLite usando concrete functions.
-    
-    Args:
-        input_model_path: str - caminho do modelo .keras
-        output_model_path: str - caminho de saída do modelo .tflite
-        quantization_mode: str - modo de quantização
-    """
-    import shutil
-    import tempfile
-    
+def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mode, runtime_mode):    
     input_model_path = resolve_input_model_path(input_model_path)
     output_model_path = resolve_output_model_path(output_model_path, input_model_path, quantization_mode, runtime_mode)
     
     print(f"Carregando modelo de {input_model_path}...")
     model = tf.keras.models.load_model(input_model_path)
+    input_height, input_width, input_channels = detect_model_input_shape(model)
+    print(f"Shape de entrada detectado automaticamente: ({input_height}, {input_width}, {input_channels})")
     
     # Tenta converter com o modo preferido, com fallbacks se necessário
     preferred_modes = [quantization_mode]
@@ -142,7 +142,7 @@ def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mo
                     lambda x: model(x, training=False)
                 ).get_concrete_function(
                     tf.TensorSpec(
-                        shape=[1, 512, 512, 3],
+                        shape=[1, input_height, input_width, input_channels],
                         dtype=tf.float32
                     )
                 )
@@ -165,7 +165,7 @@ def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mo
                     converter.optimizations = [tf.lite.Optimize.DEFAULT]
                 elif mode == 'int8':
                     converter.optimizations = [tf.lite.Optimize.DEFAULT]
-                    converter.representative_dataset = representative_dataset
+                    converter.representative_dataset = lambda: representative_dataset((input_height, input_width))
                     converter.inference_input_type = tf.int8
                     converter.inference_output_type = tf.int8
                 elif mode == 'float16':
@@ -198,10 +198,6 @@ def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mo
     print(f"  Tamanho: {file_size_mb:.2f} MB")
     print(f"  Quantização: {selected_mode}")
     print(f"  Runtime TFLite: {selected_runtime}")
-    if selected_runtime == 'flex':
-        print("  SELECT_TF_OPS: Sim (requer Flex delegate)")
-    else:
-        print("  SELECT_TF_OPS: Nao (sem Flex delegate)")
 
 
 def main():
