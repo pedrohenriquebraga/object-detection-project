@@ -6,11 +6,11 @@ import os
 from datetime import datetime
 import tensorflow as tf
 
-batch_size = 16
-img_size = (256, 256)
-epochs = 100
+batch_size = 8
+img_size = (320, 320)
+epochs = 150 # valor máximo, não total
 AUTOTUNE = tf.data.AUTOTUNE
-early_stopping_patience = 8
+early_stopping_patience = 10
 early_stopping_min_delta = 0.002
 
 gpus = tf.config.list_physical_devices('GPU')
@@ -180,7 +180,7 @@ train_dataset = (
 
 val_dataset = val_dataset.map(preprocess, num_parallel_calls=AUTOTUNE).prefetch(AUTOTUNE)
 
-base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(256, 256, 3))
+base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(320, 320, 3))
 base_model.trainable = False  # Freeze base model for transfer learning
 
 x = GlobalAveragePooling2D()(base_model.output)
@@ -206,12 +206,7 @@ for i, class_name in enumerate(train_class_names):
 
 os.makedirs('models', exist_ok=True)
 run_id = datetime.now().strftime('%Y%m%d-%H%M%S')
-log_dir = os.path.join('logs', 'fit', run_id)
-tensorboard_callback = tf.keras.callbacks.TensorBoard(
-    log_dir=log_dir,
-    histogram_freq=1,
-    write_graph=True,
-)
+
 early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     monitor='val_loss',
     min_delta=early_stopping_min_delta,
@@ -220,8 +215,9 @@ early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     restore_best_weights=True,
     verbose=1,
 )
+
 # checkpoint = tf.keras.callbacks.ModelCheckpoint(
-#     filepath='models/efficient_det.keras',
+#     filepath='models/efficient_det_20260404-163853.keras',
 #     monitor='val_accuracy',
 #     save_best_only=True,
 #     save_weights_only=False,
@@ -232,11 +228,8 @@ history = model.fit(
     validation_data=val_dataset,
     epochs=epochs,
     class_weight=class_weights_dict,
-    callbacks=[tensorboard_callback, early_stopping_callback] # checkpoint aqui
+    callbacks=[early_stopping_callback] # checkpoint aqui
 )
-
-print(f"TensorBoard logs salvos em: {log_dir}")
-print(f"Execute: tensorboard --logdir {os.path.join('logs', 'fit')}")
 
 keras_output_path = next_model_path('models', 'efficient_det', 'keras', run_id)
 model.save(keras_output_path)
