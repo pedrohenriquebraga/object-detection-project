@@ -1,178 +1,120 @@
 package com.eitalab.objectdetection.src.tensorflow
 
-import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.util.Log
-import java.io.File
-import org.tensorflow.lite.InterpreterApi as TfInterpreter
-import androidx.core.graphics.scale
 import com.eitalab.objectdetection.ui.DetectionResult
-import org.tensorflow.lite.nnapi.NnApiDelegate
+import org.tensorflow.lite.InterpreterApi as TfInterpreter
+import org.tensorflow.lite.support.image.ImageProcessor
 import org.tensorflow.lite.support.image.TensorImage
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import org.tensorflow.lite.support.image.ops.ResizeOp
+import org.tensorflow.lite.support.common.ops.NormalizeOp
+import org.tensorflow.lite.DataType
+import java.io.File
+import kotlin.math.abs
+import kotlin.math.log
 
-class TensorflowController {
+class TensorflowController(private var modelFile: File) {
 
     private lateinit var interpreter: TfInterpreter
-    private var modelFile: File
-    private var labels = arrayListOf<String>(
-        "pessoa",
-        "bicicleta",
-        "carro",
-        "moto",
-        "aviao",
-        "onibus",
-        "trem",
-        "caminhao",
-        "barco",
-        "semaforo",
-        "hidrante",
-        "sinal de transito",
-        "placa de pare",
-        "parquimetro",
-        "banco",
-        "passaro",
-        "gato",
-        "cachorro",
-        "cavalo",
-        "ovelha",
-        "vaca",
-        "elefante",
-        "urso",
-        "zebra",
-        "girafa",
-        "chapeu",
-        "mochila",
-        "guarda-chuva",
-        "sapato",
-        "oculos",
-        "bolsa",
-        "gravata",
-        "mala",
-        "frisbee",
-        "esquis",
-        "snowboard",
-        "bola de esporte",
-        "pipa",
-        "taco de beisebol",
-        "luva de beisebol",
-        "skate",
-        "prancha de surfe",
-        "Raquete de tenis",
-        "garrafa",
-        "prato",
-        "taca de vinho",
-        "copo",
-        "garfo",
-        "faca",
-        "colher",
-        "tigela",
-        "banana",
-        "maca",
-        "sanduiche",
-        "laranja",
-        "brocolis",
-        "cenoura",
-        "cachorro-quente",
-        "pizza",
-        "donut",
-        "bolo",
-        "cadeira",
-        "sofa",
-        "planta em vaso",
-        "cama",
-        "espelho",
-        "mesa de jantar",
-        "janela",
-        "mesa",
-        "vaso sanitario",
-        "porta",
-        "TV",
-        "laptop",
-        "mouse",
-        "controle remoto",
-        "teclado",
-        "celular",
-        "micro-ondas",
-        "forno",
-        "torradeira",
-        "pia",
-        "geladeira",
-        "liquidificador",
-        "livro",
-        "relogio",
-        "vaso",
-        "tesoura",
-        "ursinho de pelucia",
-        "secador de cabelo",
-        "escova de dentes",
-        "escova de cabelo"
-    )
-    private val maxConf = 0.55f
     private var started = false
 
-    constructor(modelFile: File) {
-        this.modelFile = modelFile
+    private var labels = arrayListOf(
+        "cama",                // bed
+        "ponto de ônibus",     // bus_stops
+        "gatos",               // cats
+        "cadeiras",            // chairs
+        "armários",            // closets
+        "sofás",               // couches
+        "faixas de pedestre",  // crosswalks
+        "cães",                // dogs
+        "portas",              // doors
+        "geladeiras",          // fridges
+        //"null",                // null (mantido como placeholder)
+        "pessoas",             // persons
+        "escadas",             // stairs
+        "mesas",               // tables
+        "árvores",             // trees
+        "tv",                  // tv
+        "veículos"             // vehicles
+    )
+
+    private val maxConf = 0.8f
+    private val minDeltaConf = 0.20f
+
+    private val INPUT_SIZE = 320
+    private val NUM_CLASSES = labels.size
+
+    init {
         initTensorflow()
     }
 
-    fun initTensorflow() {
-
+    private fun initTensorflow() {
         val options = TfInterpreter.Options().apply {
             setRuntime(TfInterpreter.Options.TfLiteRuntime.PREFER_SYSTEM_OVER_APPLICATION)
+            setNumThreads(4)
         }
         try {
             interpreter = TfInterpreter.create(modelFile, options)
             started = true
-            Log.i("Tensorflow Controller", "Tensorflow iniciado com sucesso")
+            Log.i("Tensorflow Controller", "Modelo EfficientNet carregado com sucesso")
         } catch (e: Exception) {
             Log.e("Tensorflow Controller", "Erro ao iniciar Tensorflow: ${e.message}")
         }
     }
 
     fun detect(imgInput: Bitmap): MutableList<DetectionResult>? {
-        if (!started)
+        if (!started) return null
+
+        val tensorImage = processImage(imgInput)
+        val outputProbability = Array(1) { FloatArray(NUM_CLASSES) }
+
+        try {
+            interpreter.run(tensorImage.buffer, outputProbability)
+        } catch (e: Exception) {
+            Log.e("Tensorflow Controller", "Erro na inferência: ${e.message}")
             return null
+        }
 
-        val imgBuffer = bitmapToTensorImage(imgInput, 320, 320);
-
-        val boxes = Array(1) { Array(25) { FloatArray(4) } }
-        val classes = Array(1) { FloatArray(25) }
-        val scores = Array(1) { FloatArray(25) }
-
-        val outputs = mutableMapOf<Int, Any>(
-            0 to boxes,
-            1 to classes,
-            2 to scores,
-        )
-
-        interpreter.runForMultipleInputsOutputs(arrayOf(imgBuffer), outputs)
-
-        val numDetections = scores[0].size
         val detections = mutableListOf<DetectionResult>()
+        val probabilities = outputProbability[0]
 
-        for (i in 0 until numDetections) {
-            val score = scores[0][i]
+        for (i in probabilities.indices) {
+            val score = probabilities[i]
             if (score >= maxConf) {
-                val clsIndex = classes[0][i].toInt()
-                val label = if (clsIndex in labels.indices) labels[clsIndex] else "Desconhecido"
-                val box = boxes[0][i]
-                detections.add(DetectionResult(label, score, box))
+                val label = labels[i]
+                if (label != "null") {
+                    detections.add(DetectionResult(label, score))
+                }
             }
         }
 
-        return detections
+        detections.sortByDescending { it.confidence }
+
+        if (detections.size >= 2) {
+            val first = detections[0]
+            val second = detections[1]
+            val deltaConfidence = abs(first.confidence - second.confidence)
+            Log.d("delta", deltaConfidence.toString())
+
+            if (deltaConfidence >= minDeltaConf) {
+                return detections
+            }
+        } else if (detections.size == 1) {
+            return detections
+        }
+
+        return mutableListOf()
     }
 
-    private fun bitmapToTensorImage(bitmap: Bitmap, width: Int, height: Int): ByteBuffer {
-        // TODO: CROP IMAGE
-        val utils = Utils()
-        val resizedBitmap = utils.cropCenter(bitmap, width, height)
-        val tensorImage = TensorImage.fromBitmap(resizedBitmap)
-        val buffer = tensorImage.buffer
-        buffer.order(ByteOrder.nativeOrder())
-        return buffer
+    private fun processImage(bitmap: Bitmap): TensorImage {
+        val tensorImage = TensorImage(DataType.FLOAT32)
+        tensorImage.load(bitmap)
+
+        val imageProcessor = ImageProcessor.Builder()
+            .add(ResizeOp(INPUT_SIZE, INPUT_SIZE, ResizeOp.ResizeMethod.BILINEAR))
+            .build()
+
+        return imageProcessor.process(tensorImage)
     }
 
     fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
@@ -181,6 +123,4 @@ class TensorflowController {
         matrix.postRotate(rotationDegrees.toFloat())
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
-
-
 }

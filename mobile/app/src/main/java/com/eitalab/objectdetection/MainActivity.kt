@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val defaultAssistiveDeviceName = "Assistive Device"
-    private val detectionInterval = 200
+    private val detectionInterval = 350
 
     @SuppressLint("MissingPermission")
     private val requestMultiplePermissionsLauncher =
@@ -104,7 +104,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initCamera() {
-        modelFile = utils.getModelFileFromAssets("efficientdet-lite0.tflite", filesDir, assets)
+        modelFile = utils.getModelFileFromAssets("efficientnet_320x320_float16_v1.tflite", filesDir, assets)
         tf = TensorflowController(modelFile)
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
@@ -207,24 +207,30 @@ class MainActivity : ComponentActivity() {
             .build()
             .also {
                 it.setAnalyzer(cameraExecutor) { imageProxy ->
-                    val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastAnalyzedTime >= detectionInterval) {
-                        lastAnalyzedTime = currentTime
-                        capturedImage = utils.capturedImageToBitmap(imageProxy, tf)
-                        val detections = tf.detect(capturedImage)
+                    try {
+                        val currentTime = System.currentTimeMillis()
+                        if (currentTime - lastAnalyzedTime >= detectionInterval) {
+                            lastAnalyzedTime = currentTime
 
-                        if (detections != null) {
-                            runOnUiThread {
-                                binding.detectionOverlay.setResults(detections, 320, 320)
-                                detections.forEach { detect ->
-                                    if (::bluetoothService.isInitialized && isDeviceConnected) {
+                            // Processamento da imagem
+                            capturedImage = utils.capturedImageToBitmap(imageProxy, tf)
+                            val detections = tf.detect(capturedImage)
+
+                            if (detections != null) {
+                                runOnUiThread {
+                                    binding.detectionOverlay.setResults(detections)
+                                }
+
+                                if (::bluetoothService.isInitialized && isDeviceConnected) {
+                                    detections.forEach { detect ->
                                         bluetoothService.sendMessage("Objeto ${detect.label} detectado com ${detect.confidence}\n")
                                     }
                                 }
                             }
                         }
-                        imageProxy.close()
-                    } else {
+                    } catch (e: Exception) {
+                        Log.e("ImageAnalyzer", "Erro ao processar frame: ${e.message}")
+                    } finally {
                         imageProxy.close()
                     }
                 }
