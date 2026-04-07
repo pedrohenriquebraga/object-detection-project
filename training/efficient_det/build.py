@@ -8,9 +8,9 @@ import tensorflow as tf
 
 batch_size = 8
 img_size = (320, 320)
-epochs = 150 # valor máximo, não total
+epochs = 100 # valor máximo, não total
 AUTOTUNE = tf.data.AUTOTUNE
-early_stopping_patience = 10
+early_stopping_patience = 20
 early_stopping_min_delta = 0.002
 
 gpus = tf.config.list_physical_devices('GPU')

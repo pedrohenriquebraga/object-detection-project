@@ -39,7 +39,7 @@ class TensorflowController(private var modelFile: File) {
     )
 
     private val maxConf = 0.8f
-    private val minDeltaConf = 0.20f
+    private val minDeltaConf = 0.25f
 
     private val INPUT_SIZE = 320
     private val NUM_CLASSES = labels.size
@@ -94,7 +94,6 @@ class TensorflowController(private var modelFile: File) {
             val first = detections[0]
             val second = detections[1]
             val deltaConfidence = abs(first.confidence - second.confidence)
-            Log.d("delta", deltaConfidence.toString())
 
             if (deltaConfidence >= minDeltaConf) {
                 return detections

@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val defaultAssistiveDeviceName = "Assistive Device"
-    private val detectionInterval = 350
+    private val detectionInterval = 200
 
     @SuppressLint("MissingPermission")
     private val requestMultiplePermissionsLauncher =
