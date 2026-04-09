@@ -6,7 +6,7 @@ from keras.layers import Dense, Dropout, GlobalAveragePooling2D
 from keras.models import Model
 from keras.optimizers import Adam
 
-batch_size = 16
+batch_size = 8
 img_size = (320, 320)
 epochs = 100 # valor máximo, não total
 AUTOTUNE = tf.data.AUTOTUNE
@@ -56,13 +56,13 @@ def save_classes_file(base_dir, output_file):
     return train_classes
 
 def resize_image(image, label):
-    # Center crop para quadrado para evitar distorção
-    size = tf.minimum(tf.shape(image)[0], tf.shape(image)[1])
-    offset_height = (tf.shape(image)[0] - size) // 2
-    offset_width = (tf.shape(image)[1] - size) // 2
-    image = tf.image.crop_to_bounding_box(image, offset_height, offset_width, size, size)
+    # # Center crop para quadrado para evitar distorção
+    # size = tf.minimum(tf.shape(image)[0], tf.shape(image)[1])
+    # offset_height = (tf.shape(image)[0] - size) // 2
+    # offset_width = (tf.shape(image)[1] - size) // 2
+    # image = tf.image.crop_to_bounding_box(image, offset_height, offset_width, size, size)
     # Resize para img_size
-    image = tf.image.resize(image, img_size)
+    image = tf.image.resize_with_pad(image, img_size[0], img_size[1])
     return image, label
 
 def check_image_validity(image_path):
@@ -155,6 +155,66 @@ def next_model_path(models_dir, base_name, extension, run_id):
             return candidate
         idx += 1
 
+
+def write_model_info_txt(model_path, metrics, base_model_name, classes_count, logs_dir='logs'):
+    os.makedirs(logs_dir, exist_ok=True)
+
+    model_file_name = os.path.basename(model_path)
+    model_stem, _ = os.path.splitext(model_file_name)
+    info_path = os.path.join(logs_dir, f"{model_stem}.txt")
+
+    def metric_value(name):
+        value = metrics.get(name)
+        if value is None:
+            return 'N/A'
+        try:
+            return f"{float(value):.6f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    with open(info_path, 'w') as f:
+        f.write(f"model_file={model_file_name}\n")
+        f.write(f"base_model={base_model_name}\n")
+        f.write(f"classes_count={classes_count}\n")
+        f.write(f"accuracy={metric_value('accuracy')}\n")
+        f.write(f"val_accuracy={metric_value('val_accuracy')}\n")
+        f.write(f"loss={metric_value('loss')}\n")
+        f.write(f"val_loss={metric_value('val_loss')}\n")
+
+    print(f"Informacoes do modelo salvas em {info_path}")
+
+
+class ModelCheckpointWithInfo(tf.keras.callbacks.ModelCheckpoint):
+    def __init__(self, *args, base_model_name, classes_count, logs_dir='logs', **kwargs):
+        super().__init__(*args, **kwargs)
+        self.base_model_name = base_model_name
+        self.classes_count = classes_count
+        self.logs_dir = logs_dir
+
+    def _save_model(self, epoch, batch, logs):
+        model_was_saved = False
+        before_mtime = os.path.getmtime(self.filepath) if os.path.exists(self.filepath) else None
+        super()._save_model(epoch, batch, logs)
+        after_mtime = os.path.getmtime(self.filepath) if os.path.exists(self.filepath) else None
+        if before_mtime is None and after_mtime is not None:
+            model_was_saved = True
+        elif before_mtime is not None and after_mtime is not None and after_mtime > before_mtime:
+            model_was_saved = True
+
+        if not model_was_saved:
+            return
+
+        if logs is None:
+            logs = {}
+
+        write_model_info_txt(
+            model_path=self.filepath,
+            metrics=logs,
+            base_model_name=self.base_model_name,
+            classes_count=self.classes_count,
+            logs_dir=self.logs_dir,
+        )
+
 for root, dirs, files in os.walk(base_dir):
     for file in files:
         file_path = os.path.join(root, file)
@@ -216,6 +276,7 @@ for i, class_name in enumerate(train_class_names):
     print(f"   {class_name:<15} → peso: {class_weights_dict[i]:.3f}")
 
 os.makedirs('models', exist_ok=True)
+os.makedirs('logs', exist_ok=True)
 run_id = datetime.now().strftime('%Y%m%d-%H%M%S')
 
 lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(
@@ -235,12 +296,15 @@ early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     verbose=1,
 )
 
-checkpoint = tf.keras.callbacks.ModelCheckpoint(
-    filepath='models/efficient_det_20260409-030229.keras',
-    monitor='val_accuracy',
-    save_best_only=True,
-    save_weights_only=False
-)
+# checkpoint = ModelCheckpointWithInfo(
+#     filepath=next_model_path('models', 'efficient_det_best', 'keras', run_id),
+#     monitor='val_accuracy',
+#     save_best_only=True,
+#     save_weights_only=False,
+#     base_model_name=base_model.name,
+#     classes_count=num_classes,
+#     logs_dir='logs',
+# )
 
 try:
     history = model.fit(
@@ -248,15 +312,35 @@ try:
         validation_data=val_dataset,
         epochs=epochs,
         class_weight=class_weights_dict,
-        callbacks=[early_stopping_callback, lr_scheduler, checkpoint] # checkpoint aqui
+        callbacks=[early_stopping_callback, lr_scheduler] # checkpoint aqui
     )
 except KeyboardInterrupt:
     print('\nTreinamento interrompido manualmente. Salvando modelo parcial...')
     interrupted_output_path = next_model_path('models', 'efficient_det_interrupted', 'keras', run_id)
     model.save(interrupted_output_path)
+    write_model_info_txt(
+        model_path=interrupted_output_path,
+        metrics={},
+        base_model_name=base_model.name,
+        classes_count=num_classes,
+        logs_dir='logs',
+    )
     print(f"Modelo parcial salvo em {interrupted_output_path} com sucesso!")
     raise SystemExit(130)
 
 keras_output_path = next_model_path('models', 'efficient_det', 'keras', run_id)
 model.save(keras_output_path)
+final_metrics = {}
+if 'history' in locals() and hasattr(history, 'history'):
+    for metric_name, metric_values in history.history.items():
+        if metric_values:
+            final_metrics[metric_name] = metric_values[-1]
+
+write_model_info_txt(
+    model_path=keras_output_path,
+    metrics=final_metrics,
+    base_model_name=base_model.name,
+    classes_count=num_classes,
+    logs_dir='logs',
+)
 print(f"Modelo salvo em {keras_output_path} com sucesso!")
