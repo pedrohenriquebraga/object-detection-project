@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val defaultAssistiveDeviceName = "Assistive Device"
-    private val detectionInterval = 200
+    private val detectionInterval = 300
 
     @SuppressLint("MissingPermission")
     private val requestMultiplePermissionsLauncher =
@@ -104,7 +104,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initCamera() {
-        modelFile = utils.getModelFileFromAssets("efficientnet_320x320_float16_v1.tflite", filesDir, assets)
+        modelFile = utils.getModelFileFromAssets("efficientnet_320x320_float16_v2.tflite", filesDir, assets)
         tf = TensorflowController(modelFile)
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({

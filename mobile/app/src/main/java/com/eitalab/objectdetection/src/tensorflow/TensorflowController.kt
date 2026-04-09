@@ -20,16 +20,16 @@ class TensorflowController(private var modelFile: File) {
 
     private var labels = arrayListOf(
         "cama",                // bed
-        "ponto de ônibus",     // bus_stops
+        "pontos de ônibus",     // bus_stops
         "gatos",               // cats
         "cadeiras",            // chairs
         "armários",            // closets
         "sofás",               // couches
         "faixas de pedestre",  // crosswalks
-        "cães",                // dogs
+        "cachorros",           // dogs
         "portas",              // doors
         "geladeiras",          // fridges
-        //"null",                // null (mantido como placeholder)
+        "null",                // null (mantido para a lógica de filtro)
         "pessoas",             // persons
         "escadas",             // stairs
         "mesas",               // tables
@@ -38,7 +38,7 @@ class TensorflowController(private var modelFile: File) {
         "veículos"             // vehicles
     )
 
-    private val maxConf = 0.8f
+    private val maxConf = 0.75f
     private val minDeltaConf = 0.25f
 
     private val INPUT_SIZE = 320
@@ -66,7 +66,7 @@ class TensorflowController(private var modelFile: File) {
         if (!started) return null
 
         val tensorImage = processImage(imgInput)
-        val outputProbability = Array(1) { FloatArray(NUM_CLASSES) }
+        val outputProbability = Array(1) { FloatArray(NUM_CLASSES ) }
 
         try {
             interpreter.run(tensorImage.buffer, outputProbability)
