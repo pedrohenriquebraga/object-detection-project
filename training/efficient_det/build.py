@@ -1,17 +1,17 @@
-from tensorflow.keras.applications import EfficientNetB0
-from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D
-from tensorflow.keras.models import Model
-
 import os
 from datetime import datetime
 import tensorflow as tf
+from keras.applications import EfficientNetB1, EfficientNetB0
+from keras.layers import Dense, Dropout, GlobalAveragePooling2D
+from keras.models import Model
+from keras.optimizers import Adam
 
-batch_size = 8
+batch_size = 16
 img_size = (320, 320)
 epochs = 100 # valor máximo, não total
 AUTOTUNE = tf.data.AUTOTUNE
 early_stopping_patience = 20
-early_stopping_min_delta = 0.002
+early_stopping_min_delta = 0.001
 
 gpus = tf.config.list_physical_devices('GPU')
 
@@ -56,6 +56,12 @@ def save_classes_file(base_dir, output_file):
     return train_classes
 
 def resize_image(image, label):
+    # Center crop para quadrado para evitar distorção
+    size = tf.minimum(tf.shape(image)[0], tf.shape(image)[1])
+    offset_height = (tf.shape(image)[0] - size) // 2
+    offset_width = (tf.shape(image)[1] - size) // 2
+    image = tf.image.crop_to_bounding_box(image, offset_height, offset_width, size, size)
+    # Resize para img_size
     image = tf.image.resize(image, img_size)
     return image, label
 
@@ -75,7 +81,7 @@ def preprocess(images, labels):
     images = tf.keras.applications.efficientnet.preprocess_input(images)
     return images, labels
 
-def maybe_grayscale(image, probability=0.35):
+def maybe_grayscale(image, probability=0.25):
     return tf.cond(
         tf.random.uniform([]) < probability,
         lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(image)),
@@ -160,11 +166,11 @@ if not train_class_names:
     raise ValueError('Nenhuma classe encontrada em ./data/train. Verifique a estrutura do dataset.')
 
 train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    train_dir, image_size=img_size, batch_size=batch_size)
+    train_dir, batch_size=batch_size)
 train_dataset = train_dataset.map(resize_image)
 
 val_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    val_dir, image_size=img_size, batch_size=batch_size)
+    val_dir, batch_size=batch_size)
 val_dataset = val_dataset.map(resize_image)
 
 rotation_layer = tf.keras.layers.RandomRotation(0.2, fill_mode='reflect')
@@ -184,15 +190,20 @@ base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(
 base_model.trainable = False  # Freeze base model for transfer learning
 
 x = GlobalAveragePooling2D()(base_model.output)
-x = Dropout(0.2)(x)
+x = Dropout(0.3)(x)
 
 num_classes = len(train_class_names)
 output = Dense(num_classes, activation='sigmoid')(x)
 
 model = Model(inputs=base_model.input, outputs=output)
 
-model.compile(optimizer='adam',
-              loss='sparse_categorical_crossentropy',
+def sparse_labels_binary_crossentropy(y_true, y_pred):
+    y_true = tf.cast(y_true, tf.int32)
+    y_true = tf.one_hot(y_true, depth=num_classes)
+    return tf.keras.losses.binary_crossentropy(y_true, y_pred)
+
+model.compile(optimizer="adam",
+              loss=sparse_labels_binary_crossentropy,
               metrics=['accuracy'])
 
 # Calcula pesos das classes para lidar com desbalanceamento
@@ -207,6 +218,14 @@ for i, class_name in enumerate(train_class_names):
 os.makedirs('models', exist_ok=True)
 run_id = datetime.now().strftime('%Y%m%d-%H%M%S')
 
+lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(
+    monitor='val_loss',
+    factor=0.2, 
+    patience=3, 
+    min_lr=1e-6,
+    verbose=1
+)
+
 early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     monitor='val_loss',
     min_delta=early_stopping_min_delta,
@@ -216,20 +235,27 @@ early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     verbose=1,
 )
 
-# checkpoint = tf.keras.callbacks.ModelCheckpoint(
-#     filepath='models/efficient_det_20260404-163853.keras',
-#     monitor='val_accuracy',
-#     save_best_only=True,
-#     save_weights_only=False,
-# )
-
-history = model.fit(
-    train_dataset,
-    validation_data=val_dataset,
-    epochs=epochs,
-    class_weight=class_weights_dict,
-    callbacks=[early_stopping_callback] # checkpoint aqui
+checkpoint = tf.keras.callbacks.ModelCheckpoint(
+    filepath='models/efficient_det_20260409-030229.keras',
+    monitor='val_accuracy',
+    save_best_only=True,
+    save_weights_only=False
 )
+
+try:
+    history = model.fit(
+        train_dataset,
+        validation_data=val_dataset,
+        epochs=epochs,
+        class_weight=class_weights_dict,
+        callbacks=[early_stopping_callback, lr_scheduler, checkpoint] # checkpoint aqui
+    )
+except KeyboardInterrupt:
+    print('\nTreinamento interrompido manualmente. Salvando modelo parcial...')
+    interrupted_output_path = next_model_path('models', 'efficient_det_interrupted', 'keras', run_id)
+    model.save(interrupted_output_path)
+    print(f"Modelo parcial salvo em {interrupted_output_path} com sucesso!")
+    raise SystemExit(130)
 
 keras_output_path = next_model_path('models', 'efficient_det', 'keras', run_id)
 model.save(keras_output_path)
