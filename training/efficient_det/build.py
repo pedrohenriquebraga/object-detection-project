@@ -259,6 +259,7 @@ model = Model(inputs=base_model.input, outputs=output)
 
 def sparse_labels_binary_crossentropy(y_true, y_pred):
     y_true = tf.cast(y_true, tf.int32)
+    y_true = tf.reshape(y_true, [-1])
     y_true = tf.one_hot(y_true, depth=num_classes)
     return tf.keras.losses.binary_crossentropy(y_true, y_pred)
 
