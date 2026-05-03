@@ -14,15 +14,12 @@ from test import (
     find_latest_model,
     get_model_input_size,
     preprocess_frame,
-    quantize_input,
-    dequantize_output,
     predict_tflite,
     predict_keras,
 )
 
 
 def load_validation_data(data_dir, classes):
-    """Carrega todas as imagens de validação e suas labels."""
     images = []
     labels = []
     
@@ -39,7 +36,6 @@ def load_validation_data(data_dir, classes):
             print(f"Aviso: Classe '{class_name}' não encontrada em {class_dir}")
             continue
 
-        # Suporta .jpg, .jpeg, .png (minúsculo e maiúsculo)
         exts = ['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG']
         image_files = []
         for ext in exts:
@@ -116,10 +112,8 @@ def main():
         model_path = args.model
     
     print(f"Usando modelo: {model_path}")
-    # Nome base do modelo para arquivos
     model_base = Path(model_path).stem
     
-    # Carrega o modelo
     print("Carregando modelo...")
     use_keras = args.keras or model_path.endswith('.keras')
     
@@ -173,7 +167,6 @@ def main():
         f.write(report)
     print(f"Relatório salvo em: {output_report}")
     
-    # Visualiza a matriz de confusão
     print("\nVisualizando matriz de confusão...")
     plt.figure(figsize=(12, 10))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
@@ -184,19 +177,6 @@ def main():
     plt.tight_layout()
     plt.savefig(output_img, dpi=300, bbox_inches='tight')
     print(f"Matriz de confusão salva em: {output_img}")
-    
-    # Exibe a matriz de confusão como tabela
-    print("\nMatriz de Confusão:")
-    print(f"{'Classes':<15}", end='')
-    for cls in classes:
-        print(f"{cls:<10}", end='')
-    print()
-    
-    for i, cls in enumerate(classes):
-        print(f"{cls:<15}", end='')
-        for j in range(len(classes)):
-            print(f"{cm[i][j]:<10}", end='')
-        print()
 
 
 if __name__ == '__main__':
