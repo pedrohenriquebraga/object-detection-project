@@ -12,3 +12,6 @@ command.txt
 logs
 models
 data
+reports
+.venv
+.vscode
