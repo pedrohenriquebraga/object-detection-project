@@ -56,12 +56,6 @@ def save_classes_file(base_dir, output_file):
     return train_classes
 
 def resize_image(image, label):
-    # # Center crop para quadrado para evitar distorção
-    # size = tf.minimum(tf.shape(image)[0], tf.shape(image)[1])
-    # offset_height = (tf.shape(image)[0] - size) // 2
-    # offset_width = (tf.shape(image)[1] - size) // 2
-    # image = tf.image.crop_to_bounding_box(image, offset_height, offset_width, size, size)
-    # Resize para img_size
     image = tf.image.resize_with_pad(image, img_size[0], img_size[1])
     return image, label
 
@@ -238,7 +232,7 @@ calibration_dataset = train_dataset.map(preprocess, num_parallel_calls=AUTOTUNE)
 
 train_dataset = (
     train_dataset
-    .shuffle(1000, reshuffle_each_iteration=True)
+    # .shuffle(1000, reshuffle_each_iteration=True)
     .map(augment_image, num_parallel_calls=AUTOTUNE)
     .map(preprocess, num_parallel_calls=AUTOTUNE)
     .prefetch(AUTOTUNE)
