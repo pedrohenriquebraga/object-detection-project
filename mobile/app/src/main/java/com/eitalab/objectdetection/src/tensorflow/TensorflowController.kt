@@ -19,27 +19,18 @@ class TensorflowController(private var modelFile: File) {
     private var started = false
 
     private var labels = arrayListOf(
-        "cama",                // bed
-        "pontos de ônibus",     // bus_stops
-        "gatos",               // cats
-        "cadeiras",            // chairs
-        "armários",            // closets
-        "sofás",               // couches
-        "faixas de pedestre",  // crosswalks
-        "cachorros",           // dogs
-        "portas",              // doors
-        "geladeiras",          // fridges
-        "null",                // null (mantido para a lógica de filtro)
-        "pessoas",             // persons
-        "escadas",             // stairs
-        "mesas",               // tables
-        "árvores",             // trees
-        "tv",                  // tv
-        "veículos"             // vehicles
+        "beds",
+        "cats",
+        "chairs",
+        "dogs",
+        "null",
+        "people",
+        "tables",
+        "vehicles"
     )
 
     private val maxConf = 0.75f
-    private val minDeltaConf = 0.25f
+    private val minRelativeDiff = 0.3f
 
     private val INPUT_SIZE = 320
     private val NUM_CLASSES = labels.size
@@ -93,9 +84,9 @@ class TensorflowController(private var modelFile: File) {
         if (detections.size >= 2) {
             val first = detections[0]
             val second = detections[1]
-            val deltaConfidence = abs(first.confidence - second.confidence)
+            val relativeDiff = (first.confidence - second.confidence) / first.confidence
 
-            if (deltaConfidence >= minDeltaConf) {
+            if (relativeDiff >= minRelativeDiff) {
                 return detections
             }
         } else if (detections.size == 1) {

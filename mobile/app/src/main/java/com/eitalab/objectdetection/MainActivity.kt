@@ -14,6 +14,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import android.view.ScaleGestureDetector
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -40,6 +42,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var cameraProvider: ProcessCameraProvider
     private lateinit var modelFile: File
     private lateinit var capturedImage: Bitmap
+    private lateinit var camera: Camera
 
     private var isBluetoothInitialized = false
     private var isDeviceConnected = false
@@ -104,7 +107,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initCamera() {
-        modelFile = utils.getModelFileFromAssets("efficientnet_320x320_float16_v2.tflite", filesDir, assets)
+        modelFile = utils.getModelFileFromAssets("efficientnet_320x320_float16_v2_lite0.tflite", filesDir, assets)
         tf = TensorflowController(modelFile)
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
@@ -236,12 +239,34 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-        cameraProvider.bindToLifecycle(
+        cameraProvider.unbindAll()
+        camera = cameraProvider.bindToLifecycle(
             this as LifecycleOwner,
             cameraSelector,
             preview,
             imageAnalyzer
         )
+
+        setupPinchToZoom()
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupPinchToZoom() {
+        val listener = object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val currentZoomRatio = camera.cameraInfo.zoomState.value?.zoomRatio ?: 1f
+                val delta = detector.scaleFactor
+                camera.cameraControl.setZoomRatio(currentZoomRatio * delta)
+                return true
+            }
+        }
+
+        val scaleGestureDetector = ScaleGestureDetector(this, listener)
+
+        binding.cameraPreview.setOnTouchListener { _, event ->
+            scaleGestureDetector.onTouchEvent(event)
+            true
+        }
     }
 
     override fun onDestroy() {

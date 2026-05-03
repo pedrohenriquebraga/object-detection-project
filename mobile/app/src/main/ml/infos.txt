@@ -1,0 +1,36 @@
+Modelo efficientnet_320x320_float16_v2_lite0:
+    Classes:
+      "beds",
+      "cats",
+      "chairs",
+      "dogs",
+      "null",
+      "people",
+      "tables",
+      "vehicles"
+    Infos:
+        - Modelo detectando muito a classe pessoas
+        - Foi treinado com o novo dataset (reduzido)
+        - Promissor, embora detecte muito a classe pessoas, consegue diferenciar bem classes conhecidas por ele
+
+Modelo efficientnet_320x320_float16_v1_lite0:
+    Classes:
+        "cama",                // bed
+        "pontos de ônibus",     // bus_stops
+        "gatos",               // cats
+        "cadeiras",            // chairs
+        "armários",            // closets
+        "sofás",               // couches
+        "faixas de pedestre",  // crosswalks
+        "cachorros",           // dogs
+        "portas",              // doors
+        "geladeiras",          // fridges
+        "pessoas",             // persons
+        "escadas",             // stairs
+        "mesas",               // tables
+        "null",
+        "árvores",             // trees
+        "tv",                  // tv
+        "veículos"             // vehicles
+    Infos:
+       - Melhor modelo testado até hoje
