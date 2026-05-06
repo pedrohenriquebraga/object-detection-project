@@ -140,15 +140,12 @@ def main():
     
     print(f"Total de imagens carregadas: {len(images)}")
     
-    # Faz predições
     print("\nFazendo predições...")
     predicted_labels = predict_with_model(model, images, model_input_size, use_keras)
 
-    # Calcula a matriz de confusão
     print("\nCalculando matriz de confusão...")
     cm = confusion_matrix(true_labels, predicted_labels, labels=range(len(classes)))
 
-    # Cria relatório de classificação
     print("\nGerando relatório de classificação...")
     report = classification_report(
         true_labels, predicted_labels,
@@ -158,7 +155,6 @@ def main():
     )
     print(report)
 
-    # Define nomes dos arquivos de saída
     output_img = args.output or reports_dir / f"confusion_matrix_{model_base}.png"
     output_report = args.report or reports_dir / f"classification_report_{model_base}.txt"
 

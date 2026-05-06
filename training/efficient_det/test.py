@@ -98,35 +98,4 @@ def predict_keras(model, img_array):
 	return model.predict(img_array, verbose=0)
 
 
-def predict_with_confidence(model, img_array, classes, confidence_threshold=0.7):
-	"""
-	Faz predição e retorna resultado com análise de confiança.
-	"""
-	predictions = predict_keras(model, img_array)
-	predictions = np.squeeze(predictions)
-	
-	top_3_indices = np.argsort(predictions)[::-1][:3]
-	top_3 = [(classes[i], float(predictions[i])) for i in top_3_indices if i < len(classes)]
-	
-	pred_class_idx = int(np.argmax(predictions))
-	pred_class = classes[pred_class_idx] if pred_class_idx < len(classes) else f'class_{pred_class_idx}'
-	confidence = float(np.max(predictions))
-	
-	is_ood = confidence < confidence_threshold
-	
-	if len(top_3) > 1:
-		if top_3[0][1] > 0:
-			relativeConf = (top_3[0][1] - top_3[1][1]) / top_3[0][1]
-		else:
-			relativeConf = 0
-		if relativeConf < 0.15:
-			is_ood = True
-	
-	return {
-		'class': pred_class,
-		'confidence': confidence,
-		'is_ood': is_ood,
-		'top_3': top_3
-	}
-
 

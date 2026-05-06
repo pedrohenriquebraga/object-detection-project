@@ -114,23 +114,6 @@ def augment_image(images, labels):
     )
     return images, labels
 
-def calculate_class_weights(dataset, num_classes):
-    """
-    Calcula pesos das classes de forma inversamente proporcional à frequência.
-    Classes com poucas imagens recebem peso maior.
-    """
-    class_counts = tf.zeros(num_classes)
-    
-    for _, labels in dataset:
-        class_counts = class_counts + tf.reduce_sum(
-            tf.one_hot(labels, depth=num_classes), axis=0
-        )
-    
-    total_samples = tf.reduce_sum(class_counts)
-    class_weights = total_samples / (num_classes * (class_counts + 1e-7))
-    
-    return class_weights.numpy()
-
 
 def representative_dataset():
     for images, _ in calibration_dataset.unbatch().take(100):
@@ -241,7 +224,7 @@ train_dataset = (
 val_dataset = val_dataset.map(preprocess, num_parallel_calls=AUTOTUNE).prefetch(AUTOTUNE)
 
 base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(320, 320, 3))
-base_model.trainable = False  # Freeze base model for transfer learning
+base_model.trainable = True  # Freeze base model for transfer learning
 
 x = GlobalAveragePooling2D()(base_model.output)
 x = Dropout(0.3)(x)
@@ -260,15 +243,6 @@ def sparse_labels_binary_crossentropy(y_true, y_pred):
 model.compile(optimizer="adam",
               loss=sparse_labels_binary_crossentropy,
               metrics=['accuracy'])
-
-# Calcula pesos das classes para lidar com desbalanceamento
-print("\n📊 Calculando pesos das classes...")
-class_weights_array = calculate_class_weights(train_dataset, num_classes)
-class_weights_dict = {i: weight for i, weight in enumerate(class_weights_array)}
-
-print("\n📋 Pesos das classes (para compensar desbalanceamento):")
-for i, class_name in enumerate(train_class_names):
-    print(f"   {class_name:<15} → peso: {class_weights_dict[i]:.3f}")
 
 os.makedirs('models', exist_ok=True)
 os.makedirs('logs', exist_ok=True)
@@ -291,23 +265,12 @@ early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     verbose=1,
 )
 
-# checkpoint = ModelCheckpointWithInfo(
-#     filepath=next_model_path('models', 'efficient_det_best', 'keras', run_id),
-#     monitor='val_accuracy',
-#     save_best_only=True,
-#     save_weights_only=False,
-#     base_model_name=base_model.name,
-#     classes_count=num_classes,
-#     logs_dir='logs',
-# )
-
 try:
     history = model.fit(
         train_dataset,
         validation_data=val_dataset,
         epochs=epochs,
-        class_weight=class_weights_dict,
-        callbacks=[early_stopping_callback, lr_scheduler] # checkpoint aqui
+        callbacks=[early_stopping_callback, lr_scheduler]
     )
 except KeyboardInterrupt:
     print('\nTreinamento interrompido manualmente. Salvando modelo parcial...')
