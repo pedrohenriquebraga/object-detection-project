@@ -6,6 +6,13 @@ from keras.layers import Dense, Dropout, GlobalAveragePooling2D
 from keras.models import Model
 from keras.optimizers import Adam
 
+from augmentations import (
+    apply_mixup_or_cutmix,
+    build_augment_image,
+    one_hot_labels,
+    preprocess,
+)
+
 batch_size = 8
 img_size = (320, 320)
 epochs = 100 # valor máximo, não total
@@ -48,11 +55,7 @@ def save_classes_file(base_dir, output_file):
         for class_name in all_classes:
             f.write(f"{class_name}\n")
 
-    if set(train_classes) != set(val_classes):
-        print('Aviso: classes diferentes entre train e val. classes.txt foi salvo com a uniao das classes encontradas.')
-
     print(f"classes.txt atualizado com {len(all_classes)} classes encontradas em {base_dir}.")
-    print(f"Numero de classes usadas no treino (data/train): {len(train_classes)}")
     return train_classes
 
 def resize_image(image, label):
@@ -70,49 +73,6 @@ def check_image_validity(image_path):
     except Exception as e:
         print(f"Error with image {image_path}: {e}")
         return False
-
-def preprocess(images, labels):
-    images = tf.keras.applications.efficientnet.preprocess_input(images)
-    return images, labels
-
-def maybe_grayscale(image, probability=0.25):
-    return tf.cond(
-        tf.random.uniform([]) < probability,
-        lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(image)),
-        lambda: image,
-    )
-
-def random_zoom_crop(image, min_scale=0.75, max_scale=0.95):
-    image_shape = tf.shape(image)
-    height = image_shape[0]
-    width = image_shape[1]
-    channels = image_shape[2]
-
-    scale = tf.random.uniform([], min_scale, max_scale)
-    crop_height = tf.maximum(1, tf.cast(tf.cast(height, tf.float32) * scale, tf.int32))
-    crop_width = tf.maximum(1, tf.cast(tf.cast(width, tf.float32) * scale, tf.int32))
-    offset_height = tf.random.uniform([], 0, height - crop_height + 1, dtype=tf.int32)
-    offset_width = tf.random.uniform([], 0, width - crop_width + 1, dtype=tf.int32)
-
-    image = tf.image.crop_to_bounding_box(image, offset_height, offset_width, crop_height, crop_width)
-    image = tf.image.resize(image, img_size)
-    image.set_shape([img_size[0], img_size[1], 3])
-    return image
-
-def augment_single_image(image):
-    image = tf.cast(image, tf.float32)
-    image = rotation_layer(tf.expand_dims(image, axis=0), training=True)[0]
-    image = maybe_grayscale(image)
-    image = random_zoom_crop(image)
-    return image
-
-def augment_image(images, labels):
-    images = tf.map_fn(
-        augment_single_image,
-        images,
-        fn_output_signature=tf.TensorSpec(shape=(img_size[0], img_size[1], 3), dtype=tf.float32),
-    )
-    return images, labels
 
 
 def representative_dataset():
@@ -160,38 +120,6 @@ def write_model_info_txt(model_path, metrics, base_model_name, classes_count, lo
 
     print(f"Informacoes do modelo salvas em {info_path}")
 
-
-class ModelCheckpointWithInfo(tf.keras.callbacks.ModelCheckpoint):
-    def __init__(self, *args, base_model_name, classes_count, logs_dir='logs', **kwargs):
-        super().__init__(*args, **kwargs)
-        self.base_model_name = base_model_name
-        self.classes_count = classes_count
-        self.logs_dir = logs_dir
-
-    def _save_model(self, epoch, batch, logs):
-        model_was_saved = False
-        before_mtime = os.path.getmtime(self.filepath) if os.path.exists(self.filepath) else None
-        super()._save_model(epoch, batch, logs)
-        after_mtime = os.path.getmtime(self.filepath) if os.path.exists(self.filepath) else None
-        if before_mtime is None and after_mtime is not None:
-            model_was_saved = True
-        elif before_mtime is not None and after_mtime is not None and after_mtime > before_mtime:
-            model_was_saved = True
-
-        if not model_was_saved:
-            return
-
-        if logs is None:
-            logs = {}
-
-        write_model_info_txt(
-            model_path=self.filepath,
-            metrics=logs,
-            base_model_name=self.base_model_name,
-            classes_count=self.classes_count,
-            logs_dir=self.logs_dir,
-        )
-
 for root, dirs, files in os.walk(base_dir):
     for file in files:
         file_path = os.path.join(root, file)
@@ -202,6 +130,8 @@ train_class_names = save_classes_file(base_dir, 'classes.txt')
 if not train_class_names:
     raise ValueError('Nenhuma classe encontrada em ./data/train. Verifique a estrutura do dataset.')
 
+num_classes = len(train_class_names)
+
 train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
     train_dir, batch_size=batch_size)
 train_dataset = train_dataset.map(resize_image)
@@ -210,14 +140,20 @@ val_dataset = tf.keras.preprocessing.image_dataset_from_directory(
     val_dir, batch_size=batch_size)
 val_dataset = val_dataset.map(resize_image)
 
-rotation_layer = tf.keras.layers.RandomRotation(0.2, fill_mode='reflect')
+rotation_layer = tf.keras.layers.RandomRotation(0.1, fill_mode='reflect')
 calibration_dataset = train_dataset.map(preprocess, num_parallel_calls=AUTOTUNE)
+augment_image = build_augment_image(img_size, rotation_layer)
+
+def to_one_hot(labels):
+    return one_hot_labels(labels, num_classes)
 
 train_dataset = (
     train_dataset
-    # .shuffle(1000, reshuffle_each_iteration=True)
+    .shuffle(500, reshuffle_each_iteration=True)
     .map(augment_image, num_parallel_calls=AUTOTUNE)
     .map(preprocess, num_parallel_calls=AUTOTUNE)
+    .map(lambda images, labels: (images, to_one_hot(labels)), num_parallel_calls=AUTOTUNE)
+    .map(apply_mixup_or_cutmix, num_parallel_calls=AUTOTUNE)
     .prefetch(AUTOTUNE)
 )
 
@@ -227,17 +163,19 @@ base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(
 base_model.trainable = True  # Freeze base model for transfer learning
 
 x = GlobalAveragePooling2D()(base_model.output)
-x = Dropout(0.3)(x)
+x = Dropout(0.2)(x)
 
-num_classes = len(train_class_names)
 output = Dense(num_classes, activation='sigmoid')(x)
 
 model = Model(inputs=base_model.input, outputs=output)
 
 def sparse_labels_binary_crossentropy(y_true, y_pred):
-    y_true = tf.cast(y_true, tf.int32)
-    y_true = tf.reshape(y_true, [-1])
-    y_true = tf.one_hot(y_true, depth=num_classes)
+    y_true = tf.convert_to_tensor(y_true)
+    if y_true.shape.rank is not None and y_true.shape.rank > 1 and y_true.shape[-1] == num_classes:
+        y_true = tf.cast(y_true, tf.float32)
+    else:
+        y_true = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
+        y_true = tf.one_hot(y_true, depth=num_classes)
     return tf.keras.losses.binary_crossentropy(y_true, y_pred)
 
 model.compile(optimizer="adam",
@@ -265,12 +203,15 @@ early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     verbose=1,
 )
 
+log_dir = "logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
+tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
+
 try:
     history = model.fit(
         train_dataset,
         validation_data=val_dataset,
         epochs=epochs,
-        callbacks=[early_stopping_callback, lr_scheduler]
+        callbacks=[early_stopping_callback, lr_scheduler, tensorboard_callback]
     )
 except KeyboardInterrupt:
     print('\nTreinamento interrompido manualmente. Salvando modelo parcial...')

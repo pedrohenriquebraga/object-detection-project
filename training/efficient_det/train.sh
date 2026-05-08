@@ -15,9 +15,3 @@ docker run -it --rm --runtime=nvidia --gpus all \
   -v "$SCRIPT_DIR/classes.txt:/app/classes.txt" \
   -v "$SCRIPT_DIR/build.py:/app/build.py:ro" \
   tf-train
-
-# TensorBoard (em outro terminal):
-# docker run -it --rm \
-#   -p 6006:6006 \
-#   -v "$SCRIPT_DIR/logs:/app/logs" \
-#   tf-train tensorboard --logdir /app/logs/fit --bind_all --port 6006
