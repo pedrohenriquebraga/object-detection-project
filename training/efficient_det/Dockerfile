@@ -20,7 +20,7 @@ RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.docker.txt \
     && pip install --no-cache-dir --force-reinstall numpy==1.26.4 ml-dtypes==0.3.2
 
-COPY build.py ./
+COPY build.py augmentations.py ./
 
 RUN mkdir -p /app/models /app/data
 VOLUME ["/app/models", "/app/data", "/app/logs"]

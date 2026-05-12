@@ -17,8 +17,8 @@ batch_size = 8
 img_size = (320, 320)
 epochs = 100 # valor máximo, não total
 AUTOTUNE = tf.data.AUTOTUNE
-early_stopping_patience = 20
-early_stopping_min_delta = 0.001
+early_stopping_patience = 10
+early_stopping_min_delta = 0.002
 
 gpus = tf.config.list_physical_devices('GPU')
 
@@ -133,54 +133,45 @@ if not train_class_names:
 num_classes = len(train_class_names)
 
 train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    train_dir, batch_size=batch_size)
+    train_dir, batch_size=batch_size, label_mode='categorical')
 train_dataset = train_dataset.map(resize_image)
 
 val_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    val_dir, batch_size=batch_size)
+    val_dir, batch_size=batch_size, label_mode='categorical')
 val_dataset = val_dataset.map(resize_image)
 
 rotation_layer = tf.keras.layers.RandomRotation(0.1, fill_mode='reflect')
 calibration_dataset = train_dataset.map(preprocess, num_parallel_calls=AUTOTUNE)
 augment_image = build_augment_image(img_size, rotation_layer)
 
-def to_one_hot(labels):
-    return one_hot_labels(labels, num_classes)
 
 train_dataset = (
     train_dataset
-    .shuffle(500, reshuffle_each_iteration=True)
+    # .shuffle(500, reshuffle_each_iteration=True)
     .map(augment_image, num_parallel_calls=AUTOTUNE)
     .map(preprocess, num_parallel_calls=AUTOTUNE)
-    .map(lambda images, labels: (images, to_one_hot(labels)), num_parallel_calls=AUTOTUNE)
-    .map(apply_mixup_or_cutmix, num_parallel_calls=AUTOTUNE)
     .prefetch(AUTOTUNE)
 )
 
-val_dataset = val_dataset.map(preprocess, num_parallel_calls=AUTOTUNE).prefetch(AUTOTUNE)
+val_dataset = (
+    val_dataset
+    .map(preprocess, num_parallel_calls=AUTOTUNE)
+    .prefetch(AUTOTUNE)
+)
 
 base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(320, 320, 3))
 base_model.trainable = True  # Freeze base model for transfer learning
 
 x = GlobalAveragePooling2D()(base_model.output)
-x = Dropout(0.2)(x)
+x = Dropout(0.3)(x)
 
 output = Dense(num_classes, activation='sigmoid')(x)
 
 model = Model(inputs=base_model.input, outputs=output)
 
-def sparse_labels_binary_crossentropy(y_true, y_pred):
-    y_true = tf.convert_to_tensor(y_true)
-    if y_true.shape.rank is not None and y_true.shape.rank > 1 and y_true.shape[-1] == num_classes:
-        y_true = tf.cast(y_true, tf.float32)
-    else:
-        y_true = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
-        y_true = tf.one_hot(y_true, depth=num_classes)
-    return tf.keras.losses.binary_crossentropy(y_true, y_pred)
-
 model.compile(optimizer="adam",
-              loss=sparse_labels_binary_crossentropy,
-              metrics=['accuracy'])
+              loss=tf.keras.losses.BinaryCrossentropy(),
+              metrics=[tf.keras.metrics.CategoricalAccuracy(name='accuracy')])
 
 os.makedirs('models', exist_ok=True)
 os.makedirs('logs', exist_ok=True)
@@ -203,7 +194,7 @@ early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     verbose=1,
 )
 
-log_dir = "logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
+log_dir = "logs/fit/" + run_id
 tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
 try:

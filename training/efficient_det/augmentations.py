@@ -181,14 +181,6 @@ def build_augment_image(img_size, rotation_layer):
     return augment_image
 
 
-def one_hot_labels(labels, num_classes):
-    labels = tf.convert_to_tensor(labels)
-    if labels.shape.rank is not None and labels.shape.rank > 1 and labels.shape[-1] == num_classes:
-        return tf.cast(labels, tf.float32)
-    labels = tf.cast(tf.reshape(labels, [-1]), tf.int32)
-    return tf.one_hot(labels, depth=num_classes)
-
-
 def mixup_batch(images, labels, alpha=0.2):
     batch_size = tf.shape(images)[0]
     indices = tf.random.shuffle(tf.range(batch_size))
