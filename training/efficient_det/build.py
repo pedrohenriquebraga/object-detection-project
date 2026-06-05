@@ -7,9 +7,7 @@ from keras.models import Model
 from keras.optimizers import Adam
 
 from augmentations import (
-    apply_mixup_or_cutmix,
     build_augment_image,
-    one_hot_labels,
     preprocess,
 )
 

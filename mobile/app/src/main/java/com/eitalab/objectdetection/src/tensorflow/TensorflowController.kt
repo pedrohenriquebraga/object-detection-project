@@ -29,8 +29,8 @@ class TensorflowController(private var modelFile: File) {
         "vehicles"
     )
 
-    private val maxConf = 0.75f
-    private val minRelativeDiff = 0.3f
+    private val maxConf = 0.80f
+    private val minRelativeDiff = 0.65f
 
     private val INPUT_SIZE = 320
     private val NUM_CLASSES = labels.size
