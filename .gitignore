@@ -16,3 +16,4 @@ reports
 .venv
 .vscode
 *.zip
+training/efficient_det/relatorio_tensorboard.pdf
