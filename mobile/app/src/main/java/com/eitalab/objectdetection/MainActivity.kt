@@ -107,7 +107,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initCamera() {
-        modelFile = utils.getModelFileFromAssets("efficientnet_320x320_float16_v4_lite0.tflite", filesDir, assets)
+        modelFile = utils.getModelFileFromAssets("efficientnet_320x320_float16_v6_lite0.tflite", filesDir, assets)
         tf = TensorflowController(modelFile)
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
