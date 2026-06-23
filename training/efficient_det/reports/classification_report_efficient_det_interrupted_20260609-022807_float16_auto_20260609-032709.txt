@@ -1,0 +1,14 @@
+              precision    recall  f1-score   support
+
+        beds       0.88      0.63      0.73       366
+        cats       0.43      0.95      0.59       398
+      chairs       0.90      0.64      0.74       406
+        dogs       0.96      0.79      0.87       392
+        null       0.20      0.98      0.33        84
+      people       0.79      0.51      0.62       216
+      tables       0.96      0.48      0.64       414
+    vehicles       0.95      0.31      0.46       366
+
+    accuracy                           0.64      2642
+   macro avg       0.76      0.66      0.62      2642
+weighted avg       0.82      0.64      0.66      2642
