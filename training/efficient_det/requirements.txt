@@ -1,4 +1,8 @@
-tensorflow[and-cuda]==2.16.1
+tensorflow==2.16.1; platform_system == "Windows"
+tensorflow[and-cuda]==2.16.1; platform_system != "Windows"
 numpy==1.26.4
 pillow==10.4.0
 opencv-python==4.9.0.80
+scikit-learn
+matplotlib
+seaborn

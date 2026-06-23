@@ -1,17 +1,32 @@
-from tensorflow.keras.applications import EfficientNetB0
-from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D
-from tensorflow.keras.models import Model
-
 import os
 from datetime import datetime
 import tensorflow as tf
+from keras.applications import EfficientNetB1, EfficientNetB0
+from keras.layers import Dense, Dropout, GlobalAveragePooling2D
+from keras.models import Model
+from keras.optimizers import Adam
 
-batch_size = 16
-img_size = (256, 256)
-epochs = 100
+from augmentations import (
+    build_augment_image,
+    preprocess,
+)
+
+batch_size = 8
+img_size = (320, 320)
+epochs = 100 # valor máximo, não total
+# Staged training: primeiro congelamos o backbone, depois descongelamos para fine-tune
+epochs_frozen = 10
 AUTOTUNE = tf.data.AUTOTUNE
-early_stopping_patience = 8
-early_stopping_min_delta = 0.002
+early_stopping_patience = 7
+early_stopping_min_delta = 0.001
+
+# Optimization / regularization
+base_lr = 1e-4
+fine_tune_lr = 1e-5
+weight_decay = 1e-4
+dropout_rate = 0.5
+# Shuffle buffer reduzido para economizar RAM. Ajuste via EFFICIENT_DET_SHUFFLE_BUFFER env var.
+shuffle_buffer = int(os.environ.get('EFFICIENT_DET_SHUFFLE_BUFFER', '64'))
 
 gpus = tf.config.list_physical_devices('GPU')
 
@@ -48,15 +63,11 @@ def save_classes_file(base_dir, output_file):
         for class_name in all_classes:
             f.write(f"{class_name}\n")
 
-    if set(train_classes) != set(val_classes):
-        print('Aviso: classes diferentes entre train e val. classes.txt foi salvo com a uniao das classes encontradas.')
-
     print(f"classes.txt atualizado com {len(all_classes)} classes encontradas em {base_dir}.")
-    print(f"Numero de classes usadas no treino (data/train): {len(train_classes)}")
     return train_classes
 
 def resize_image(image, label):
-    image = tf.image.resize(image, img_size)
+    image = tf.image.resize_with_pad(image, img_size[0], img_size[1])
     return image, label
 
 def check_image_validity(image_path):
@@ -70,66 +81,6 @@ def check_image_validity(image_path):
     except Exception as e:
         print(f"Error with image {image_path}: {e}")
         return False
-
-def preprocess(images, labels):
-    images = tf.keras.applications.efficientnet.preprocess_input(images)
-    return images, labels
-
-def maybe_grayscale(image, probability=0.35):
-    return tf.cond(
-        tf.random.uniform([]) < probability,
-        lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(image)),
-        lambda: image,
-    )
-
-def random_zoom_crop(image, min_scale=0.75, max_scale=0.95):
-    image_shape = tf.shape(image)
-    height = image_shape[0]
-    width = image_shape[1]
-    channels = image_shape[2]
-
-    scale = tf.random.uniform([], min_scale, max_scale)
-    crop_height = tf.maximum(1, tf.cast(tf.cast(height, tf.float32) * scale, tf.int32))
-    crop_width = tf.maximum(1, tf.cast(tf.cast(width, tf.float32) * scale, tf.int32))
-    offset_height = tf.random.uniform([], 0, height - crop_height + 1, dtype=tf.int32)
-    offset_width = tf.random.uniform([], 0, width - crop_width + 1, dtype=tf.int32)
-
-    image = tf.image.crop_to_bounding_box(image, offset_height, offset_width, crop_height, crop_width)
-    image = tf.image.resize(image, img_size)
-    image.set_shape([img_size[0], img_size[1], 3])
-    return image
-
-def augment_single_image(image):
-    image = tf.cast(image, tf.float32)
-    image = rotation_layer(tf.expand_dims(image, axis=0), training=True)[0]
-    image = maybe_grayscale(image)
-    image = random_zoom_crop(image)
-    return image
-
-def augment_image(images, labels):
-    images = tf.map_fn(
-        augment_single_image,
-        images,
-        fn_output_signature=tf.TensorSpec(shape=(img_size[0], img_size[1], 3), dtype=tf.float32),
-    )
-    return images, labels
-
-def calculate_class_weights(dataset, num_classes):
-    """
-    Calcula pesos das classes de forma inversamente proporcional à frequência.
-    Classes com poucas imagens recebem peso maior.
-    """
-    class_counts = tf.zeros(num_classes)
-    
-    for _, labels in dataset:
-        class_counts = class_counts + tf.reduce_sum(
-            tf.one_hot(labels, depth=num_classes), axis=0
-        )
-    
-    total_samples = tf.reduce_sum(class_counts)
-    class_weights = total_samples / (num_classes * (class_counts + 1e-7))
-    
-    return class_weights.numpy()
 
 
 def representative_dataset():
@@ -149,6 +100,34 @@ def next_model_path(models_dir, base_name, extension, run_id):
             return candidate
         idx += 1
 
+
+def write_model_info_txt(model_path, metrics, base_model_name, classes_count, logs_dir='logs'):
+    os.makedirs(logs_dir, exist_ok=True)
+
+    model_file_name = os.path.basename(model_path)
+    model_stem, _ = os.path.splitext(model_file_name)
+    info_path = os.path.join(logs_dir, f"{model_stem}.txt")
+
+    def metric_value(name):
+        value = metrics.get(name)
+        if value is None:
+            return 'N/A'
+        try:
+            return f"{float(value):.6f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    with open(info_path, 'w') as f:
+        f.write(f"model_file={model_file_name}\n")
+        f.write(f"base_model={base_model_name}\n")
+        f.write(f"classes_count={classes_count}\n")
+        f.write(f"accuracy={metric_value('accuracy')}\n")
+        f.write(f"val_accuracy={metric_value('val_accuracy')}\n")
+        f.write(f"loss={metric_value('loss')}\n")
+        f.write(f"val_loss={metric_value('val_loss')}\n")
+
+    print(f"Informacoes do modelo salvas em {info_path}")
+
 for root, dirs, files in os.walk(base_dir):
     for file in files:
         file_path = os.path.join(root, file)
@@ -159,59 +138,64 @@ train_class_names = save_classes_file(base_dir, 'classes.txt')
 if not train_class_names:
     raise ValueError('Nenhuma classe encontrada em ./data/train. Verifique a estrutura do dataset.')
 
+num_classes = len(train_class_names)
+
 train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    train_dir, image_size=img_size, batch_size=batch_size)
+    train_dir, batch_size=batch_size, label_mode='categorical')
 train_dataset = train_dataset.map(resize_image)
 
 val_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    val_dir, image_size=img_size, batch_size=batch_size)
+    val_dir, batch_size=batch_size, label_mode='categorical')
 val_dataset = val_dataset.map(resize_image)
 
-rotation_layer = tf.keras.layers.RandomRotation(0.2, fill_mode='reflect')
+rotation_layer = tf.keras.layers.RandomRotation(0.1, fill_mode='reflect')
 calibration_dataset = train_dataset.map(preprocess, num_parallel_calls=AUTOTUNE)
+augment_image = build_augment_image(img_size, rotation_layer)
+
 
 train_dataset = (
     train_dataset
-    .shuffle(1000, reshuffle_each_iteration=True)
+    .shuffle(shuffle_buffer, reshuffle_each_iteration=True)
     .map(augment_image, num_parallel_calls=AUTOTUNE)
     .map(preprocess, num_parallel_calls=AUTOTUNE)
     .prefetch(AUTOTUNE)
 )
 
-val_dataset = val_dataset.map(preprocess, num_parallel_calls=AUTOTUNE).prefetch(AUTOTUNE)
+val_dataset = (
+    val_dataset
+    .map(preprocess, num_parallel_calls=AUTOTUNE)
+    .prefetch(AUTOTUNE)
+)
 
-base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(256, 256, 3))
-base_model.trainable = False  # Freeze base model for transfer learning
+base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(320, 320, 3))
+# start with the backbone frozen for stable transfer learning
+base_model.trainable = False
 
 x = GlobalAveragePooling2D()(base_model.output)
-x = Dropout(0.2)(x)
+x = Dropout(dropout_rate)(x)
 
-num_classes = len(train_class_names)
-output = Dense(num_classes, activation='sigmoid')(x)
+# Use softmax + CategoricalCrossentropy for single-label multiclass classification
+output = Dense(num_classes, activation='softmax', kernel_regularizer=tf.keras.regularizers.l2(weight_decay))(x)
 
 model = Model(inputs=base_model.input, outputs=output)
 
-model.compile(optimizer='adam',
-              loss='sparse_categorical_crossentropy',
-              metrics=['accuracy'])
-
-# Calcula pesos das classes para lidar com desbalanceamento
-print("\n📊 Calculando pesos das classes...")
-class_weights_array = calculate_class_weights(train_dataset, num_classes)
-class_weights_dict = {i: weight for i, weight in enumerate(class_weights_array)}
-
-print("\n📋 Pesos das classes (para compensar desbalanceamento):")
-for i, class_name in enumerate(train_class_names):
-    print(f"   {class_name:<15} → peso: {class_weights_dict[i]:.3f}")
+optimizer = tf.keras.optimizers.Adam(learning_rate=base_lr)
+model.compile(optimizer=optimizer,
+              loss=tf.keras.losses.CategoricalCrossentropy(),
+              metrics=[tf.keras.metrics.CategoricalAccuracy(name='accuracy')])
 
 os.makedirs('models', exist_ok=True)
+os.makedirs('logs', exist_ok=True)
 run_id = datetime.now().strftime('%Y%m%d-%H%M%S')
-log_dir = os.path.join('logs', 'fit', run_id)
-tensorboard_callback = tf.keras.callbacks.TensorBoard(
-    log_dir=log_dir,
-    histogram_freq=1,
-    write_graph=True,
+
+lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(
+    monitor='val_loss',
+    factor=0.2, 
+    patience=3, 
+    min_lr=1e-6,
+    verbose=1
 )
+
 early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     monitor='val_loss',
     min_delta=early_stopping_min_delta,
@@ -220,24 +204,81 @@ early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     restore_best_weights=True,
     verbose=1,
 )
-# checkpoint = tf.keras.callbacks.ModelCheckpoint(
-#     filepath='models/efficient_det.keras',
-#     monitor='val_accuracy',
-#     save_best_only=True,
-#     save_weights_only=False,
-# )
 
-history = model.fit(
-    train_dataset,
-    validation_data=val_dataset,
-    epochs=epochs,
-    class_weight=class_weights_dict,
-    callbacks=[tensorboard_callback, early_stopping_callback] # checkpoint aqui
+# Save best model during training
+checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+    filepath=os.path.join('models', f'best_{run_id}.keras'),
+    monitor='val_loss',
+    save_best_only=True,
+    verbose=1,
 )
 
-print(f"TensorBoard logs salvos em: {log_dir}")
-print(f"Execute: tensorboard --logdir {os.path.join('logs', 'fit')}")
+log_dir = "logs/fit/" + run_id
+tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
+
+try:
+    history = None
+    # Phase 1: train top (backbone frozen)
+    if epochs_frozen > 0:
+        history_phase1 = model.fit(
+            train_dataset,
+            validation_data=val_dataset,
+            epochs=min(epochs_frozen, epochs),
+            callbacks=[early_stopping_callback, lr_scheduler, tensorboard_callback, checkpoint_callback]
+        )
+        history = history_phase1
+
+    # Phase 2: unfreeze backbone and fine-tune
+    if epochs > epochs_frozen:
+        base_model.trainable = True
+        # recompile with lower LR for fine-tuning
+        optimizer_finetune = tf.keras.optimizers.Adam(learning_rate=fine_tune_lr)
+        model.compile(optimizer=optimizer_finetune,
+                      loss=tf.keras.losses.CategoricalCrossentropy(),
+                      metrics=[tf.keras.metrics.CategoricalAccuracy(name='accuracy')])
+
+        history_phase2 = model.fit(
+            train_dataset,
+            validation_data=val_dataset,
+            initial_epoch=(history.history['loss'].__len__() if history and hasattr(history, 'history') else 0),
+            epochs=epochs,
+            callbacks=[early_stopping_callback, lr_scheduler, tensorboard_callback, checkpoint_callback]
+        )
+
+        # merge histories
+        if history and hasattr(history, 'history'):
+            for k, v in history_phase2.history.items():
+                history.history.setdefault(k, []).extend(v)
+        else:
+            history = history_phase2
+    
+except KeyboardInterrupt:
+    print('\nTreinamento interrompido manualmente. Salvando modelo parcial...')
+    interrupted_output_path = next_model_path('models', 'efficient_det_interrupted', 'keras', run_id)
+    model.save(interrupted_output_path)
+    write_model_info_txt(
+        model_path=interrupted_output_path,
+        metrics={},
+        base_model_name=base_model.name,
+        classes_count=num_classes,
+        logs_dir='logs',
+    )
+    print(f"Modelo parcial salvo em {interrupted_output_path} com sucesso!")
+    raise SystemExit(130)
 
 keras_output_path = next_model_path('models', 'efficient_det', 'keras', run_id)
 model.save(keras_output_path)
+final_metrics = {}
+if 'history' in locals() and hasattr(history, 'history'):
+    for metric_name, metric_values in history.history.items():
+        if metric_values:
+            final_metrics[metric_name] = metric_values[-1]
+
+write_model_info_txt(
+    model_path=keras_output_path,
+    metrics=final_metrics,
+    base_model_name=base_model.name,
+    classes_count=num_classes,
+    logs_dir='logs',
+)
 print(f"Modelo salvo em {keras_output_path} com sucesso!")

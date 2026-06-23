@@ -107,7 +107,7 @@ def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mo
     output_model_path = resolve_output_model_path(output_model_path, input_model_path, quantization_mode, runtime_mode)
     
     print(f"Carregando modelo de {input_model_path}...")
-    model = tf.keras.models.load_model(input_model_path)
+    model = tf.keras.models.load_model(input_model_path, compile=False)
     input_height, input_width, input_channels = detect_model_input_shape(model)
     print(f"Shape de entrada detectado automaticamente: ({input_height}, {input_width}, {input_channels})")
     

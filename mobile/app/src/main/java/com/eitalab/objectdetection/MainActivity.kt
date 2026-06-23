@@ -14,6 +14,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import android.view.ScaleGestureDetector
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -40,6 +42,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var cameraProvider: ProcessCameraProvider
     private lateinit var modelFile: File
     private lateinit var capturedImage: Bitmap
+    private lateinit var camera: Camera
 
     private var isBluetoothInitialized = false
     private var isDeviceConnected = false
@@ -48,7 +51,7 @@ class MainActivity : ComponentActivity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val defaultAssistiveDeviceName = "Assistive Device"
-    private val detectionInterval = 200
+    private val detectionInterval = 300
 
     @SuppressLint("MissingPermission")
     private val requestMultiplePermissionsLauncher =
@@ -104,7 +107,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initCamera() {
-        modelFile = utils.getModelFileFromAssets("efficientdet-lite0.tflite", filesDir, assets)
+        modelFile = utils.getModelFileFromAssets("efficientnet_320x320_float16_v6_lite0.tflite", filesDir, assets)
         tf = TensorflowController(modelFile)
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
@@ -207,35 +210,63 @@ class MainActivity : ComponentActivity() {
             .build()
             .also {
                 it.setAnalyzer(cameraExecutor) { imageProxy ->
-                    val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastAnalyzedTime >= detectionInterval) {
-                        lastAnalyzedTime = currentTime
-                        capturedImage = utils.capturedImageToBitmap(imageProxy, tf)
-                        val detections = tf.detect(capturedImage)
+                    try {
+                        val currentTime = System.currentTimeMillis()
+                        if (currentTime - lastAnalyzedTime >= detectionInterval) {
+                            lastAnalyzedTime = currentTime
 
-                        if (detections != null) {
-                            runOnUiThread {
-                                binding.detectionOverlay.setResults(detections, 320, 320)
-                                detections.forEach { detect ->
-                                    if (::bluetoothService.isInitialized && isDeviceConnected) {
+                            // Processamento da imagem
+                            capturedImage = utils.capturedImageToBitmap(imageProxy, tf)
+                            val detections = tf.detect(capturedImage)
+
+                            if (detections != null) {
+                                runOnUiThread {
+                                    binding.detectionOverlay.setResults(detections)
+                                }
+
+                                if (::bluetoothService.isInitialized && isDeviceConnected) {
+                                    detections.forEach { detect ->
                                         bluetoothService.sendMessage("Objeto ${detect.label} detectado com ${detect.confidence}\n")
                                     }
                                 }
                             }
                         }
-                        imageProxy.close()
-                    } else {
+                    } catch (e: Exception) {
+                        Log.e("ImageAnalyzer", "Erro ao processar frame: ${e.message}")
+                    } finally {
                         imageProxy.close()
                     }
                 }
             }
 
-        cameraProvider.bindToLifecycle(
+        cameraProvider.unbindAll()
+        camera = cameraProvider.bindToLifecycle(
             this as LifecycleOwner,
             cameraSelector,
             preview,
             imageAnalyzer
         )
+
+        setupPinchToZoom()
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupPinchToZoom() {
+        val listener = object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val currentZoomRatio = camera.cameraInfo.zoomState.value?.zoomRatio ?: 1f
+                val delta = detector.scaleFactor
+                camera.cameraControl.setZoomRatio(currentZoomRatio * delta)
+                return true
+            }
+        }
+
+        val scaleGestureDetector = ScaleGestureDetector(this, listener)
+
+        binding.cameraPreview.setOnTouchListener { _, event ->
+            scaleGestureDetector.onTouchEvent(event)
+            true
+        }
     }
 
     override fun onDestroy() {

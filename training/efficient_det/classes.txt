@@ -1,11 +1,8 @@
-bus
-cars
+beds
 cats
 chairs
 dogs
-doors
-fridges
-persons
-stairs
+null
+people
 tables
-tv
+vehicles

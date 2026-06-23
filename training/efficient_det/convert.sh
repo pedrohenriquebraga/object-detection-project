@@ -7,11 +7,13 @@ set -euo pipefail
 #   quantization_mode: int8, float16, dynamic (padrão), float
 #   runtime: builtin (padrão, sem Flex), flex, auto
 
-QUANTIZATION=${1:-dynamic}
-RUNTIME=${2:-builtin}
+QUANTIZATION=${1:-float16}
+RUNTIME=${2:-auto}
 
-sudo docker --context default run -it --rm \
-  -v "$(pwd)/models:/app/models" \
-  -v "$(pwd)/data:/app/data" \
-  -v "$(pwd)/convert.py:/app/convert.py:ro" \
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+docker run -it --rm \
+  -v "$SCRIPT_DIR/models:/app/models" \
+  -v "$SCRIPT_DIR/data:/app/data" \
+  -v "$SCRIPT_DIR/convert.py:/app/convert.py:ro" \
   tf-train python3 /app/convert.py --quantization "$QUANTIZATION" --runtime "$RUNTIME"
