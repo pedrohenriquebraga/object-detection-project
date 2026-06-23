@@ -1,136 +1,71 @@
-# Relatório das métricas do TensorBoard
+# Relatório das Métricas do TensorBoard
 
-Este texto explica, de forma mais simples, o que cada métrica do TensorBoard quer dizer e como ela ajuda a entender se o modelo está aprendendo bem.
+Este documento detalha o comportamento das métricas observadas no TensorBoard, como cada uma age nas camadas do modelo, os sinais interpretados a partir dos gráficos reais do experimento e as ações recomendadas para mitigar o comportamento de sobreajuste (*overfitting*) identificado.
 
-As métricas deste projeto podem ser vistas em dois grupos:
+---
 
-1. As que mostram o desempenho do treino e da validação.
-2. As que mostram como os pesos e camadas internas do modelo estão se comportando.
+## 1. Métricas de Desempenho (Treino / Validação)
 
-## 1. Métricas de desempenho
+### `epoch_accuracy`
+* **O que é:** A acurácia mede a proporção de previsões corretas feitas pelo modelo em relação ao total de amostras processadas durante uma época completa (uma passagem inteira pelo *dataset*). É uma métrica de avaliação intuitiva, geralmente variando de 0 a 1 (ou 0% a 100%), que indica o quão bem o modelo está a classificar ou acertar os dados naquele momento específico do treino (dados já vistos) ou da validação (dados novos).
+* **Como age nas camadas:** Reflete o efeito agregado de todas as camadas na decisão final; aumentos geralmente correspondem aos pesos das camadas classificadoras sendo alinhados com a superfície de decisão.
+* **Efeito no treinamento:** Subida consistente sugere aprendizado; subida muito rápida com validação estática indica *overfitting* localizado nas camadas finais.
+* **Sinais comuns:** Acurácia de treino sobe continuamente enquanto a acurácia de validação fica estável (platô).
+* **Análise do modelo atual:** No gráfico de `epoch_accuracy`, a curva de treino (azul) sobe de forma acentuada aproximando-se de 100% (1.0), enquanto a curva de validação (verde) estabiliza-se precocemente em um patamar significativamente inferior. Isso indica que as camadas aprenderam a mapear os dados de treino quase perfeitamente, mas falham em generalizar para dados não vistos.
 
-### epoch_accuracy
+### `epoch_loss`
+* **O que é:** A *loss* (função de perda ou custo) quantifica a divergência entre as previsões do modelo e os rótulos reais. Diferente da acurácia, que é binária (acertou ou errou), a *loss* penaliza o modelo de forma contínua pelo grau de incerteza da previsão (usando, por exemplo, *Cross-Entropy* para classificação). É o valor matemático fundamental que o otimizador tenta minimizar ativamente calculando os gradientes após cada processamento.
+* **Como age nas camadas:** A *loss* guia o sinal de gradiente que ajusta os pesos em todas as camadas do modelo.
+* **Efeito no treinamento:** Queda consistente mostra que os gradientes estão reduzindo o erro. Variações bruscas ou divergências indicam instabilidade ou inadequação da taxa de aprendizado.
+* **Sinais comuns:** *Loss* de treino caindo enquanto a de validação sobe de forma contínua após um ponto de mínimo.
+* **Análise do modelo atual:** O gráfico de `epoch_loss` demonstra o comportamento clássico de *overfitting*. A curva de treino decresce agressivamente em direção ao zero. Em contrapartida, a curva de validação atinge um ponto mínimo nas primeiras épocas e, a partir daí, passa a subir de forma constante, indicando que o modelo começou a memorizar ruídos do dataset de treino.
 
-Mostra a porcentagem de acertos do modelo no treino ao final de cada época. Em outras palavras, indica quantas previsões estavam certas naquele ciclo.
+### `epoch_learning_rate`
+* **O que é:** A taxa de aprendizado (*learning rate*) é o hiperparâmetro que define o tamanho do "passo" matemático que o modelo dá ao atualizar os seus pesos na direção calculada para minimizar a *loss*. Pode ser um valor fixo estático ou um valor dinâmico que decai e se ajusta ao longo do tempo através de um *scheduler*, determinando a velocidade e a estabilidade com que o modelo assimila os padrões.
+* **Como age nas camadas:** Controla a magnitude das atualizações dos pesos em todas as camadas.
+* **Efeito no treinamento:** LR alto acelera a convergência inicial, mas pode causar oscilações e impedir o modelo de atingir o mínimo global; LR baixo torna o aprendizado excessivamente lento.
+* **Análise do modelo atual:** O comportamento do LR permitiu uma convergência suave e rápida nas primeiras épocas, mas devido à falta de regularização, facilitou a rápida divergência da perda de validação.
 
-Quando essa métrica sobe, é um bom sinal: o modelo está aprendendo. Se ela sobe muito rápido, mas a validação não acompanha, pode ser que o modelo esteja decorando o treino em vez de aprender de verdade.
+### `evaluation_loss_vs_iterations` e `evaluation_accuracy_vs_iterations`
+* **O que são:** Representam a evolução contínua das métricas de perda e acurácia computadas no conjunto de validação (dados isolados não utilizados para treinar), mas plotadas iterativamente ao longo do processo (frequentemente após um determinado número de *batches*, sem esperar a época inteira acabar). Elas fornecem uma visão altamente granular de como a capacidade de generalização do modelo flutua microscopicamente a cada rodada de atualização de pesos.
+* **Como agem nas camadas:** Expõem diretamente se as representações intermediárias e os filtros aprendidos são genéricos o suficiente para dados nunca vistos.
+* **Análise do modelo atual:** O gráfico de `evaluation_loss_vs_iterations` atinge o seu vale (ponto ideal de generalização) logo no primeiro terço do treinamento, subindo de forma linear e contínua nas iterações seguintes. Esse comportamento valida a necessidade urgente de um mecanismo de interrupção antecipada (*Early Stopping*).
 
-Exemplo: se a acurácia sobe de 45% para 90%, o modelo está melhorando bastante. Mas se a validação fica parada em 60%, isso sugere que ele ainda não generaliza bem para dados novos.
+---
 
-### epoch_loss
+## 2. Estatísticas Internas do Modelo (Camadas)
 
-Mostra o erro médio do modelo no treino. Quanto menor esse valor, melhor.
+Essas métricas aparecem na forma de histogramas e distribuições temporais, fornecendo pistas sobre estabilidade numérica, saturação e dinâmica dos gradientes.
 
-Na prática, a loss ajuda a ver se o modelo está ficando mais seguro nas respostas. Às vezes a acurácia quase não muda, mas a loss cai, o que significa que o modelo está acertando com mais confiança.
+### `kernel` (Pesos da Camada)
+* **O que é:** Os *kernels* (ou pesos) são as matrizes numéricas aprendíveis centrais do modelo. Nas camadas convolucionais, atuam como filtros que detectam características visuais (bordas, texturas). Nas camadas densas (*fully-connected*), representam a força da conexão entre neurônios, ditando a importância de cada característica extraída para a classificação final. O TensorBoard mapeia a distribuição estatística de todos esses milhões de valores.
+* **Como age nas camadas:** Mudanças nos *kernels* indicam o aprendizado e refinamento de filtros visuais ou combinações lineares.
+* **Análise do modelo atual:** Os histogramas tridimensionais (gráficos roxos) de `kernel` mostram uma distribuição bem comportada, centrada em torno de zero, que se alarga de forma gradual e suave com o passar das épocas. Isso demonstra excelente estabilidade numérica: não há indícios de explosão de gradiente (alargamento excessivo) nem de desvanecimento (linhas extremamente finas e estáticas).
 
-Exemplo: um modelo pode continuar com 82% de acerto, mas a loss cair de 0,9 para 0,4. Isso mostra que ele ainda está refinando o aprendizado.
+### `bias`
+* **O que é:** O *bias* (viés) é um parâmetro linear aditivo extra associado a cada neurônio ou filtro, independente da entrada. Ele atua deslocando o limiar da função de ativação (para cima ou para baixo, para a esquerda ou para a direita). Isso garante que, mesmo quando os valores de entrada são nulos, a rede tenha uma linha de base operacional e maior flexibilidade geométrica para ajustar sua curva aos dados.
+* **Como age nas camadas:** Ajustam os limiares operacionais das funções de ativação.
+* **Análise do modelo atual:** A distribuição de `bias` exibe um formato de sino estreito e simétrico que evolui de forma estável. Isso comprova que a rede está ajustando seus limiares de ativação corretamente, sem criar vieses severos ou desproporcionais para classes específicas.
 
-### epoch_learning_rate
+### `gamma` e `beta` (BatchNorm / LayerNorm)
+* **O que são:** São os dois parâmetros ajustáveis exclusivos das camadas de normalização. Depois que a camada padroniza as saídas (subtraindo a média e dividindo pelo desvio padrão), ela aplica o `gamma` como um fator multiplicador de escala e o `beta` como um fator de deslocamento da média. Isso permite que a rede "desfaça" a normalização apenas o necessário para restaurar algum poder expressivo que o nivelamento estrito possa ter apagado.
+* **Como agem nas camadas:** Controlam a amplitude e a média das saídas normalizadas antes da próxima ativação não-linear.
+* **Análise do modelo atual:** As distribuições de `gamma` e `beta` mantêm-se densas, simétricas e estáveis ao longo do tempo. O fato de `gamma` não colapsar em direção a zero indica que as camadas de normalização continuam ativas e desempenhando seu papel de estabilização do fluxo de ativações entre as camadas.
 
-Mostra o tamanho do passo usado para atualizar os pesos em cada época.
+### `mean` e `variance` (Ativação por Batch)
+* **O que são:** Refletem as estatísticas matemáticas (média e variância absolutas) computadas localmente sobre as ativações (sinais que saem dos neurônios) de um único *mini-batch* durante o processo de *forward pass* no treino. Eles mostram se, no calor do momento, os valores numéricos estão concentrados e equilibrados, ou se a rede sofre de picos de magnitude que causariam instabilidade.
+* **Efeito no treinamento:** Valores controlados evitam a saturação de funções como ReLU (neurônios mortos) ou Sigmoid/Tanh (gradiente nulo).
+* **Análise do modelo atual:** Os gráficos mostram oscilações controladas dentro de uma faixa saudável, confirmando que a dinâmica interna dos dados durante o *forward pass* está equilibrada.
 
-Se esse valor estiver alto demais, o treino pode ficar instável e oscilar. Se estiver baixo demais, o aprendizado fica muito lento. Em geral, essa curva ajuda a entender por que o modelo acelerou ou desacelerou durante o treinamento.
+### `moving_mean` e `moving_variance`
+* **O que são:** São estimativas globais e suavizadas do comportamento estatístico da rede, mantidas através de uma média móvel exponencial durante o treinamento. A função vital delas é atuar como substitutas fixas para a média e a variância originais do *batch* assim que o modelo é colocado em produção ou modo de avaliação. Isso garante que a inferência em imagens avulsas seja determinística e confiável, não dependendo do tamanho ou do conteúdo de um *batch* local.
+* **Análise do modelo atual:** Apresentam curvas suavizadas e bem calibradas nos histogramas, garantindo consistência no comportamento do modelo quando alternado para o modo de avaliação (`model.eval()`).
 
-Exemplo: começar com uma taxa maior e depois diminuir ajuda o modelo a aprender rápido no início e fazer ajustes mais finos no final.
+---
 
-## 2. Métricas de validação
+## 3. Leitura Conjunta e Diagnóstico Técnico
 
-### evaluation_accuracy_vs_iterations
+A análise integrada de todas as curvas permite formular um diagnóstico preciso:
 
-Mostra a acurácia na validação ao longo das iterações.
-
-Ela ajuda a ver se o modelo está realmente funcionando bem em dados que ele não viu no treino. Se essa curva sobe e depois cai, pode ser um sinal de que o melhor ponto do treinamento já passou.
-
-Exemplo: a validação sobe até 78% e depois começa a cair. Nesse caso, o melhor modelo talvez seja aquele salvo no pico, e não o último do treino.
-
-### evaluation_loss_vs_iterations
-
-Mostra o erro na validação ao longo das iterações.
-
-Essa é uma das curvas mais importantes para saber se o modelo está generalizando bem. Se o erro de treino cai, mas o da validação sobe, normalmente é sinal de overfitting.
-
-Exemplo: o erro no treino cai de 0,6 para 0,2, mas o da validação sobe de 0,7 para 1,1. Isso mostra que o modelo está indo muito bem no treino, mas piorando em dados novos.
-
-## 3. Estatísticas internas do modelo
-
-Essas métricas aparecem como histogramas ou distribuições. Elas não medem diretamente se o modelo está bom ou ruim, mas ajudam a enxergar se as camadas internas estão estáveis.
-
-### kernel
-
-Representa os pesos principais das camadas.
-
-Se esses pesos ficam muito próximos de zero por muito tempo, a camada pode estar aprendendo pouco. Se eles se espalham demais, pode haver instabilidade.
-
-Exemplo: em uma camada convolucional, um kernel bem distribuído indica que o modelo está aprendendo filtros úteis, como bordas e texturas.
-
-### bias
-
-São valores de ajuste que ajudam a camada a fazer previsões melhores.
-
-Biases muito grandes ou muito estranhos podem indicar que o modelo está tentando compensar algum problema nos pesos.
-
-Exemplo: se um bias cresce demais na camada final, o modelo pode começar a favorecer uma classe mais do que deveria.
-
-### gamma
-
-É um valor que ajusta a força da saída de uma camada de normalização.
-
-Se ele crescer demais ou cair demais, a camada pode perder sua utilidade. Quando está estável, ajuda o treino a ficar mais consistente.
-
-Exemplo: um gamma equilibrado ajuda a manter os sinais da rede em uma faixa boa para aprendizado.
-
-### beta
-
-É outro valor usado em camadas de normalização, funcionando como um deslocamento.
-
-Quando esse valor muda de forma muito brusca, pode ser um sinal de que as ativações estão variando demais.
-
-Exemplo: quando o beta começa perto de zero e vai se ajustando aos poucos, a rede está encontrando uma distribuição melhor para os dados.
-
-### mean
-
-Mostra a média dos valores acompanhados pela camada.
-
-Se a média sobe ou desce demais, isso pode indicar que a camada está saindo do padrão esperado.
-
-Exemplo: uma média que cresce sem parar pode mostrar que a camada está ficando menos estável ao longo do treino.
-
-### variance
- 
-Mostra o quanto os valores estão espalhados em torno da média.
-
-Se a variância é muito baixa, a camada pode estar produzindo respostas parecidas demais. Se é muito alta, o modelo pode ficar instável.
-
-Exemplo: uma variância muito pequena pode fazer o modelo tratar imagens diferentes como se fossem parecidas demais.
-
-### moving_mean
-
-É uma média “acumulada” que o modelo usa para funcionar melhor na validação e na produção.
-
-Se essa curva é suave e estável, é um bom sinal. Se ela oscila demais, o treinamento pode estar irregular.
-
-Exemplo: com dados muito variados, um moving_mean estável ajuda o modelo a se comportar de forma mais previsível depois de treinado.
-
-### moving_variance
-
-É a versão acumulada da variância usada na validação e na inferência.
-
-Ela ajuda o modelo a continuar funcionando com o mesmo comportamento depois que o treino termina.
-
-Exemplo: se essa métrica fica estável, o modelo tende a manter um desempenho mais parecido quando for exportado para uso real.
-
-### count
-
-Mostra quantas vezes uma métrica foi registrada.
-
-Ela não diz se o modelo está bom, mas ajuda a saber se existe informação suficiente para analisar a curva com confiança.
-
-Exemplo: uma métrica com poucos pontos ainda não dá uma leitura tão segura quanto uma curva com muitos registros.
-
-## 4. Como ler tudo junto
-
-O ideal é observar as curvas em conjunto.
-
-Se a acurácia sobe e o erro cai ao mesmo tempo, o modelo está aprendendo. Se isso também acontece na validação, a tendência é que ele esteja generalizando bem. Se o treino melhora, mas a validação piora, geralmente o modelo está exagerando no aprendizado do treino e precisa parar antes, usar mais dados ou ter alguma forma de regularização.
-
-As métricas internas, como kernel, bias, gamma, beta, mean, variance, moving_mean e moving_variance, servem como sinais de alerta. Elas ajudam a perceber quando alguma camada está instável ou quando os pesos estão saindo do esperado.
+* **Diagnóstico Geral:** O modelo apresenta um quadro nítido de **Overfitting Severo (Sobreajuste)**. 
+* **Justificativa:** A saúde interna da rede é excelente — demonstrada pela perfeita estabilidade e evolução dos histogramas de `kernel`, `bias`, `gamma` e `beta`. Os gradientes estão fluindo perfeitamente e a rede tem alta capacidade de aprendizado, o que causa a queda contínua da `epoch_loss` de treino. Contudo, essa capacidade matemática é excessiva frente à complexidade ou volume do dataset atual, fazendo com que as camadas profundas decorem os dados de treino em vez de aprender características genéricas.

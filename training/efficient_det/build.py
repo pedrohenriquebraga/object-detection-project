@@ -14,9 +14,19 @@ from augmentations import (
 batch_size = 8
 img_size = (320, 320)
 epochs = 100 # valor máximo, não total
+# Staged training: primeiro congelamos o backbone, depois descongelamos para fine-tune
+epochs_frozen = 10
 AUTOTUNE = tf.data.AUTOTUNE
-early_stopping_patience = 10
-early_stopping_min_delta = 0.002
+early_stopping_patience = 7
+early_stopping_min_delta = 0.001
+
+# Optimization / regularization
+base_lr = 1e-4
+fine_tune_lr = 1e-5
+weight_decay = 1e-4
+dropout_rate = 0.5
+# Shuffle buffer reduzido para economizar RAM. Ajuste via EFFICIENT_DET_SHUFFLE_BUFFER env var.
+shuffle_buffer = int(os.environ.get('EFFICIENT_DET_SHUFFLE_BUFFER', '64'))
 
 gpus = tf.config.list_physical_devices('GPU')
 
@@ -145,7 +155,7 @@ augment_image = build_augment_image(img_size, rotation_layer)
 
 train_dataset = (
     train_dataset
-    # .shuffle(500, reshuffle_each_iteration=True)
+    .shuffle(shuffle_buffer, reshuffle_each_iteration=True)
     .map(augment_image, num_parallel_calls=AUTOTUNE)
     .map(preprocess, num_parallel_calls=AUTOTUNE)
     .prefetch(AUTOTUNE)
@@ -158,17 +168,20 @@ val_dataset = (
 )
 
 base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(320, 320, 3))
-base_model.trainable = True  # Freeze base model for transfer learning
+# start with the backbone frozen for stable transfer learning
+base_model.trainable = False
 
 x = GlobalAveragePooling2D()(base_model.output)
-x = Dropout(0.3)(x)
+x = Dropout(dropout_rate)(x)
 
-output = Dense(num_classes, activation='sigmoid')(x)
+# Use softmax + CategoricalCrossentropy for single-label multiclass classification
+output = Dense(num_classes, activation='softmax', kernel_regularizer=tf.keras.regularizers.l2(weight_decay))(x)
 
 model = Model(inputs=base_model.input, outputs=output)
 
-model.compile(optimizer="adam",
-              loss=tf.keras.losses.BinaryCrossentropy(),
+optimizer = tf.keras.optimizers.Adam(learning_rate=base_lr)
+model.compile(optimizer=optimizer,
+              loss=tf.keras.losses.CategoricalCrossentropy(),
               metrics=[tf.keras.metrics.CategoricalAccuracy(name='accuracy')])
 
 os.makedirs('models', exist_ok=True)
@@ -192,16 +205,53 @@ early_stopping_callback = tf.keras.callbacks.EarlyStopping(
     verbose=1,
 )
 
+# Save best model during training
+checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+    filepath=os.path.join('models', f'best_{run_id}.keras'),
+    monitor='val_loss',
+    save_best_only=True,
+    verbose=1,
+)
+
 log_dir = "logs/fit/" + run_id
 tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
 try:
-    history = model.fit(
-        train_dataset,
-        validation_data=val_dataset,
-        epochs=epochs,
-        callbacks=[early_stopping_callback, lr_scheduler, tensorboard_callback]
-    )
+    history = None
+    # Phase 1: train top (backbone frozen)
+    if epochs_frozen > 0:
+        history_phase1 = model.fit(
+            train_dataset,
+            validation_data=val_dataset,
+            epochs=min(epochs_frozen, epochs),
+            callbacks=[early_stopping_callback, lr_scheduler, tensorboard_callback, checkpoint_callback]
+        )
+        history = history_phase1
+
+    # Phase 2: unfreeze backbone and fine-tune
+    if epochs > epochs_frozen:
+        base_model.trainable = True
+        # recompile with lower LR for fine-tuning
+        optimizer_finetune = tf.keras.optimizers.Adam(learning_rate=fine_tune_lr)
+        model.compile(optimizer=optimizer_finetune,
+                      loss=tf.keras.losses.CategoricalCrossentropy(),
+                      metrics=[tf.keras.metrics.CategoricalAccuracy(name='accuracy')])
+
+        history_phase2 = model.fit(
+            train_dataset,
+            validation_data=val_dataset,
+            initial_epoch=(history.history['loss'].__len__() if history and hasattr(history, 'history') else 0),
+            epochs=epochs,
+            callbacks=[early_stopping_callback, lr_scheduler, tensorboard_callback, checkpoint_callback]
+        )
+
+        # merge histories
+        if history and hasattr(history, 'history'):
+            for k, v in history_phase2.history.items():
+                history.history.setdefault(k, []).extend(v)
+        else:
+            history = history_phase2
+    
 except KeyboardInterrupt:
     print('\nTreinamento interrompido manualmente. Salvando modelo parcial...')
     interrupted_output_path = next_model_path('models', 'efficient_det_interrupted', 'keras', run_id)
