@@ -1,8 +1,0 @@
-beds
-cats
-chairs
-dogs
-null
-people
-tables
-vehicles
