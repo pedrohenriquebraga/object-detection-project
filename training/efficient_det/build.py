@@ -11,7 +11,7 @@ from augmentations import (
     preprocess,
 )
 
-batch_size = 8
+batch_size = 32
 img_size = (320, 320)
 epochs = 100 # valor máximo, não total
 # Staged training: primeiro congelamos o backbone, depois descongelamos para fine-tune
@@ -64,7 +64,7 @@ def save_classes_file(base_dir, output_file):
             f.write(f"{class_name}\n")
 
     print(f"classes.txt atualizado com {len(all_classes)} classes encontradas em {base_dir}.")
-    return train_classes
+    return all_classes
 
 def resize_image(image, label):
     image = tf.image.resize_with_pad(image, img_size[0], img_size[1])
@@ -128,24 +128,39 @@ def write_model_info_txt(model_path, metrics, base_model_name, classes_count, lo
 
     print(f"Informacoes do modelo salvas em {info_path}")
 
+def ensure_class_dirs_exist(all_classes, *data_dirs):
+    """Garante que todos os diretórios de classe existam nos diretórios de dados."""
+    for data_dir in data_dirs:
+        if not os.path.isdir(data_dir):
+            print(f"Aviso: O diretório de dados '{data_dir}' não existe. Pulando a criação de subdiretórios.")
+            continue
+        for class_name in all_classes:
+            class_path = os.path.join(data_dir, class_name)
+            os.makedirs(class_path, exist_ok=True)
+
 for root, dirs, files in os.walk(base_dir):
     for file in files:
         file_path = os.path.join(root, file)
         if not check_image_validity(file_path):
             os.remove(file_path)
 
-train_class_names = save_classes_file(base_dir, 'classes.txt')
-if not train_class_names:
+all_class_names = save_classes_file(base_dir, 'classes.txt')
+if not all_class_names:
     raise ValueError('Nenhuma classe encontrada em ./data/train. Verifique a estrutura do dataset.')
 
-num_classes = len(train_class_names)
+with open('classes.txt', 'r') as f:
+    num_classes = len([line for line in f.read().splitlines() if line.strip()])
+
+# Garante que ambos os diretórios de treino e validação tenham subdiretórios para todas as classes.
+ensure_class_dirs_exist(all_class_names, train_dir, val_dir)
+
 
 train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    train_dir, batch_size=batch_size, label_mode='categorical')
+    train_dir, batch_size=batch_size, label_mode='categorical', class_names=all_class_names)
 train_dataset = train_dataset.map(resize_image)
 
 val_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    val_dir, batch_size=batch_size, label_mode='categorical')
+    val_dir, batch_size=batch_size, label_mode='categorical', class_names=all_class_names)
 val_dataset = val_dataset.map(resize_image)
 
 rotation_layer = tf.keras.layers.RandomRotation(0.1, fill_mode='reflect')

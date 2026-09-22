@@ -1,0 +1,9 @@
+beds
+cars
+cats
+chairs
+dogs
+null
+people
+tables
+vehicles
