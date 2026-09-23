@@ -1,1 +1,1 @@
-python3 /app/convert.py --quantization "$QUANTIZATION" --runtime "$RUNTIME"
+python3 convert.py --quantization float16 --runtime builtin

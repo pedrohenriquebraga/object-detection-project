@@ -1,6 +1,5 @@
 import tensorflow as tf
 
-
 def preprocess(images, labels):
     images = tf.keras.applications.efficientnet.preprocess_input(images)
     return images, labels
@@ -101,7 +100,7 @@ def blur_or_sharpen(image, probability=0.6):
             [[1.0, 2.0, 1.0],
              [2.0, 4.0, 2.0],
              [1.0, 2.0, 1.0]],
-            dtype=tf.float32,
+            dtype=image.dtype,
         ) / 16.0
         blur_kernel = tf.reshape(blur_kernel, [3, 3, 1, 1])
         blur_kernel = tf.tile(blur_kernel, [1, 1, 3, 1])
@@ -113,7 +112,7 @@ def blur_or_sharpen(image, probability=0.6):
             [[0.0, -1.0, 0.0],
              [-1.0, 5.0, -1.0],
              [0.0, -1.0, 0.0]],
-            dtype=tf.float32,
+            dtype=image.dtype,
         )
         sharpen_kernel = tf.reshape(sharpen_kernel, [3, 3, 1, 1])
         sharpen_kernel = tf.tile(sharpen_kernel, [1, 1, 3, 1])
@@ -142,7 +141,7 @@ def random_cutout(image, probability=0.35, max_fraction=0.25):
 
         left = middle[:, :offset_width]
         right = middle[:, offset_width + cut_width:]
-        fill_value = tf.reduce_mean(image, axis=[0, 1], keepdims=True)
+        fill_value = tf.cast(tf.reduce_mean(image, axis=[0, 1], keepdims=True), dtype=image.dtype)
         cut_patch = tf.ones([cut_height, cut_width, 3], dtype=image.dtype) * fill_value
         patched_middle = tf.concat([left, cut_patch, right], axis=1)
         return tf.concat([top, patched_middle, bottom], axis=0)

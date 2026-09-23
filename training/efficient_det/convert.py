@@ -3,6 +3,8 @@ import sys
 import argparse
 from datetime import datetime
 import tensorflow as tf
+import numpy as np
+
 # import shutil
 # import tempfile
 
@@ -102,31 +104,90 @@ def representative_dataset(img_size):
         yield [tf.expand_dims(tf.cast(images, tf.float32), axis=0)]
 
 
+
+
 def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mode, runtime_mode):    
     input_model_path = resolve_input_model_path(input_model_path)
     output_model_path = resolve_output_model_path(output_model_path, input_model_path, quantization_mode, runtime_mode)
     
-    print(f"Carregando modelo de {input_model_path}...")
-    model = tf.keras.models.load_model(input_model_path, compile=False)
-    input_height, input_width, input_channels = detect_model_input_shape(model)
-    print(f"Shape de entrada detectado automaticamente: ({input_height}, {input_width}, {input_channels})")
+    # 1. Força a política de precisão global em float32 pura
+    tf.keras.mixed_precision.set_global_policy('float32')
     
-    # Tenta converter com o modo preferido, com fallbacks se necessário
+    print(f"Carregando modelo original de {input_model_path}...")
+    trained_model = tf.keras.models.load_model(input_model_path, compile=False)
+    input_height, input_width, input_channels = detect_model_input_shape(trained_model)
+    num_classes = trained_model.output_shape[-1]
+    print(f"Propriedades: ({input_height}x{input_width}x{input_channels}) | Classes: {num_classes}")
+    
+    # 2. Desempacota o backbone e reconstrói um grafo 100% plano em float32
+    print("Desempacotando grafo e recriando em float32 estático...")
+    inputs = tf.keras.Input(shape=(input_height, input_width, input_channels), dtype=tf.float32, name="input_image")
+    
+    # Encontra a sub-rede EfficientNet dentro do modelo treinado
+    backbone = None
+    for layer in trained_model.layers:
+        if "efficientnet" in layer.name.lower() or isinstance(layer, tf.keras.Model):
+            backbone = layer
+            break
+
+    if backbone is None:
+        raise ValueError("Não foi possível isolar o backbone EfficientNet do modelo.")
+
+    # Reconstrói a sub-rede passando pelos nós com float32 estático
+    # Para evitar que o Keras insira cast dinâmico nas BatchNormalizations:
+    def clone_layer(layer):
+        config = layer.get_config()
+        if "dtype" in config:
+            config["dtype"] = "float32"
+        return layer.__class__.from_config(config)
+
+    # Aplica o re-mapping de camadas no backbone
+    x = inputs
+    layer_map = {}
+    for layer in backbone.layers:
+        if isinstance(layer, tf.keras.layers.InputLayer):
+            continue
+        
+        # Reconecta os tensores de entrada de cada camada
+        in_tensors = layer.input
+        if isinstance(in_tensors, list):
+            layer_inputs = [layer_map[t.ref()] for t in in_tensors]
+        else:
+            layer_inputs = layer_map.get(in_tensors.ref(), x)
+            
+        new_layer = clone_layer(layer)
+        x = new_layer(layer_inputs)
+        
+        # Copia os pesos convertidos em float32 no NumPy
+        weights = layer.get_weights()
+        if weights:
+            new_layer.set_weights([np.array(w, dtype=np.float32) for w in weights])
+            
+        if isinstance(layer.output, list):
+            for orig_out, new_out in zip(layer.output, x):
+                layer_map[orig_out.ref()] = new_out
+        else:
+            layer_map[layer.output.ref()] = x
+
+    # Conecta as camadas da cabeça final (GAP -> Dropout -> Dense)
+    x = tf.keras.layers.GlobalAveragePooling2D(dtype="float32")(x)
+    x = tf.keras.layers.Dropout(0.4)(x)
+    
+    # Extrai os pesos da camada Dense treinada
+    dense_layer = [l for l in trained_model.layers if isinstance(l, tf.keras.layers.Dense)][-1]
+    outputs = tf.keras.layers.Dense(num_classes, activation="softmax", dtype="float32", name="predictions")(x)
+    outputs_layer = outputs.node.layer
+    outputs_layer.set_weights([np.array(w, dtype=np.float32) for w in dense_layer.get_weights()])
+
+    clean_model = tf.keras.Model(inputs=inputs, outputs=outputs)
+    print("✓ Grafo reconstruído e desempacotado com sucesso em float32 puro!")
+
+    # 3. Conversão TFLite
     preferred_modes = [quantization_mode]
-    
-    if quantization_mode == 'int8':
-        # INT8 pode falhar, use fallback para dynamic e float
-        preferred_modes.extend(['dynamic', 'float'])
-    elif quantization_mode == 'float16':
-        # float16 pode falhar, usar dynamic e float
+    if quantization_mode in ['int8', 'float16']:
         preferred_modes.extend(['dynamic', 'float'])
     
-    if runtime_mode == 'builtin':
-        runtime_candidates = ['builtin']
-    elif runtime_mode == 'flex':
-        runtime_candidates = ['flex']
-    else:
-        runtime_candidates = ['builtin', 'flex']
+    runtime_candidates = ['builtin'] if runtime_mode == 'builtin' else (['flex'] if runtime_mode == 'flex' else ['builtin', 'flex'])
 
     tflite_model = None
     selected_mode = None
@@ -138,16 +199,7 @@ def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mo
             try:
                 print(f"Tentando conversão com modo '{mode}' e runtime '{runtime_candidate}'...")
 
-                concrete_func = tf.function(
-                    lambda x: model(x, training=False)
-                ).get_concrete_function(
-                    tf.TensorSpec(
-                        shape=[1, input_height, input_width, input_channels],
-                        dtype=tf.float32
-                    )
-                )
-
-                converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_func])
+                converter = tf.lite.TFLiteConverter.from_keras_model(clean_model)
                 converter.experimental_enable_resource_variables = False
                 converter.allow_custom_ops = False
 
@@ -159,9 +211,7 @@ def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mo
                 else:
                     converter.target_spec.supported_ops = [tf.lite.OpsSet.SELECT_TF_OPS]
 
-                if mode == 'float':
-                    pass
-                elif mode == 'dynamic':
+                if mode == 'dynamic':
                     converter.optimizations = [tf.lite.Optimize.DEFAULT]
                 elif mode == 'int8':
                     converter.optimizations = [tf.lite.Optimize.DEFAULT]
@@ -172,6 +222,7 @@ def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mo
                     converter.optimizations = [tf.lite.Optimize.DEFAULT]
                     converter.target_spec.supported_types = [tf.float16]
 
+                print("Gerando os bytes do TFLite nativo...")
                 tflite_model = converter.convert()
                 selected_mode = mode
                 selected_runtime = runtime_candidate
@@ -179,7 +230,7 @@ def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mo
                 break
             except Exception as conversion_error:
                 last_error = conversion_error
-                print(f"⚠ Falha na conversão com modo '{mode}' e runtime '{runtime_candidate}'.")
+                print(f"⚠ Falha na conversão com modo '{mode}' e runtime '{runtime_candidate}': {conversion_error}")
 
         if tflite_model is not None:
             break
@@ -187,7 +238,7 @@ def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mo
     if tflite_model is None:
         raise RuntimeError(f"Nenhuma conversão TFLite teve sucesso. Último erro: {last_error}")
     
-    # Salva o modelo TFLite
+    # Salva o arquivo TFLite
     os.makedirs(os.path.dirname(output_model_path) or '.', exist_ok=True)
     with open(output_model_path, "wb") as f:
         f.write(tflite_model)
@@ -198,8 +249,7 @@ def convert_keras_to_tflite(input_model_path, output_model_path, quantization_mo
     print(f"  Tamanho: {file_size_mb:.2f} MB")
     print(f"  Quantização: {selected_mode}")
     print(f"  Runtime TFLite: {selected_runtime}")
-
-
+    
 def main():
     parser = argparse.ArgumentParser(
         description="Converter modelo Keras para TFLite"

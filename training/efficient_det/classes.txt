@@ -1,5 +1,4 @@
 beds
-cars
 cats
 chairs
 dogs
