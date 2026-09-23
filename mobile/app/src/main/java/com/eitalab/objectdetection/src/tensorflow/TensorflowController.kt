@@ -19,18 +19,27 @@ class TensorflowController(private var modelFile: File) {
     private var started = false
 
     private var labels = arrayListOf(
-        "beds",
-        "cats",
-        "chairs",
-        "dogs",
-        "null",
-        "people",
-        "tables",
-        "vehicles"
+        "cama",                // bed
+        "pontos de ônibus",     // bus_stops
+        "gatos",               // cats
+        "cadeiras",            // chairs
+        "armários",            // closets
+        "sofás",               // couches
+        "faixas de pedestre",  // crosswalks
+        "cachorros",           // dogs
+        "portas",              // doors
+        "geladeiras",          // fridges
+        "pessoas",             // persons
+        "escadas",             // stairs
+        "mesas",               // tables
+//        "null",
+        "árvores",             // trees
+        "tv",                  // tv
+        "veículos"             // vehicles
     )
 
-    private val maxConf = 0.80f
-    private val minRelativeDiff = 0.65f
+    private val maxConf = 0.75f
+    private val minRelativeDiff = 0.75
 
     private val INPUT_SIZE = 320
     private val NUM_CLASSES = labels.size
